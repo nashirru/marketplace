@@ -4,17 +4,18 @@ if (!defined('BASE_URL')) die('Akses dilarang');
 
 // Logika Filter
 $status_filter = $_GET['status'] ?? 'semua';
-// Status baru yang relevan dengan alur kerja
-$allowed_statuses = ['semua', 'waiting_payment', 'waiting_approval', 'processed', 'shipped', 'completed', 'cancelled'];
+// Tambahkan status baru ke dalam array yang diizinkan
+$allowed_statuses = ['semua', 'waiting_payment', 'waiting_approval', 'belum_dicetak', 'processed', 'shipped', 'completed', 'cancelled'];
 if (!in_array($status_filter, $allowed_statuses)) {
     $status_filter = 'semua';
 }
 
-// Mapping status baru untuk judul dan filter
+// Mapping status baru untuk judul, filter, dan dropdown
 $status_map = [
     'semua' => 'Semua Pesanan',
     'waiting_payment' => 'Menunggu Pembayaran',
     'waiting_approval' => 'Perlu Verifikasi',
+    'belum_dicetak' => 'Belum di Cetak', // Status baru untuk Admin
     'processed' => 'Diproses',
     'shipped' => 'Dikirim',
     'completed' => 'Selesai',
@@ -27,6 +28,7 @@ function get_admin_status_class($status) {
         case 'completed': return 'bg-green-100 text-green-800';
         case 'shipped': return 'bg-blue-100 text-blue-800';
         case 'processed': return 'bg-purple-100 text-purple-800';
+        case 'belum_dicetak': return 'bg-teal-100 text-teal-800'; // Warna baru
         case 'waiting_approval': return 'bg-yellow-100 text-yellow-800';
         case 'waiting_payment': return 'bg-orange-100 text-orange-800';
         case 'cancelled': return 'bg-red-100 text-red-800';
@@ -53,16 +55,31 @@ while ($row = $result->fetch_assoc()) {
 $stmt->close();
 ?>
 
-<!-- Sub Navigasi Filter -->
-<div class="mb-6 flex flex-wrap items-center gap-2 border-b border-gray-200 pb-2">
-    <?php foreach ($status_map as $status_key => $status_name): ?>
-        <a href="?page=pesanan&status=<?= $status_key ?>" 
-           class="px-3 py-1.5 text-sm font-medium rounded-md transition-colors 
-                  <?= $status_filter == $status_key ? 'bg-indigo-600 text-white shadow' : 'text-gray-600 hover:bg-gray-200' ?>">
-            <?= $status_name ?>
+<!-- Kontrol Atas -->
+<div class="mb-6 flex flex-wrap items-center justify-between gap-4 border-b border-gray-200 pb-4">
+    <!-- Sub Navigasi Filter -->
+    <div class="flex flex-wrap items-center gap-2">
+        <?php foreach ($status_map as $status_key => $status_name): ?>
+            <a href="?page=pesanan&status=<?= $status_key ?>" 
+               class="px-3 py-1.5 text-sm font-medium rounded-md transition-colors 
+                      <?= $status_filter == $status_key ? 'bg-indigo-600 text-white shadow' : 'text-gray-600 hover:bg-gray-200' ?>">
+                <?= $status_name ?>
+            </a>
+        <?php endforeach; ?>
+    </div>
+    
+    <!-- Tombol Cetak Semua Resi (hanya muncul saat filter 'Belum di Cetak') -->
+    <?php if ($status_filter === 'belum_dicetak' && !empty($orders)): ?>
+    <div>
+        <a href="<?= BASE_URL ?>/admin/pesanan/cetak_resi.php?action=print_all" 
+           target="_blank"
+           class="px-4 py-2 bg-green-600 text-white text-sm font-semibold rounded-md hover:bg-green-700 shadow">
+            Cetak Semua Resi
         </a>
-    <?php endforeach; ?>
+    </div>
+    <?php endif; ?>
 </div>
+
 
 <?= flash_message('success'); ?>
 <?= flash_message('error'); ?>
@@ -84,7 +101,7 @@ $stmt->close();
             <?php foreach($orders as $order): ?>
                 <tr>
                     <td class="px-4 py-4 whitespace-nowrap text-sm">
-                        <a href="<?= BASE_URL ?>/checkout/invoice.php?uid=<?= $order['order_uid'] ?>" target="_blank" class="font-medium text-indigo-600 hover:text-indigo-800">#WK<?= $order['id'] ?></a>
+                        <a href="<?= BASE_URL ?>/checkout/invoice.php?hash=<?= $order['order_hash'] ?>" target="_blank" class="font-medium text-indigo-600 hover:text-indigo-800">#WK<?= $order['id'] ?></a>
                     </td>
                     <td class="px-4 py-4 whitespace-nowrap text-sm text-gray-500"><?= htmlspecialchars($order['user_name']) ?></td>
                     <td class="px-4 py-4 whitespace-nowrap text-sm text-gray-500"><?= format_rupiah($order['total']) ?></td>
@@ -97,20 +114,33 @@ $stmt->close();
                     </td>
                     <td class="px-4 py-4 whitespace-nowrap text-sm">
                         <span class="px-2 inline-flex text-xs leading-5 font-semibold rounded-full <?= get_admin_status_class($order['status']) ?>">
-                            <?= ucfirst(str_replace('_', ' ', $order['status'])) ?>
+                            <?= htmlspecialchars($status_map[$order['status']]) ?>
                         </span>
                     </td>
                     <td class="px-4 py-4 whitespace-nowrap text-sm">
-                        <form action="<?= BASE_URL ?>/admin/admin.php" method="POST" class="flex items-center space-x-2">
-                            <input type="hidden" name="order_id" value="<?= $order['id'] ?>">
-                            <input type="hidden" name="current_page" value="<?= htmlspecialchars($_SERVER['REQUEST_URI']) ?>">
-                            <select name="status" class="text-xs border-gray-300 rounded-md shadow-sm">
-                                <?php foreach($status_map as $key => $value): if($key == 'semua') continue; ?>
-                                <option value="<?= $key ?>" <?= $order['status'] == $key ? 'selected' : '' ?>><?= $value ?></option>
-                                <?php endforeach; ?>
-                            </select>
-                            <button type="submit" name="update_status" class="px-2 py-1 text-xs bg-indigo-600 text-white rounded-md hover:bg-indigo-700">Update</button>
-                        </form>
+                        <div class="flex items-center space-x-2">
+                             <!-- Tombol Cetak Resi Individual -->
+                            <?php if ($order['status'] == 'belum_dicetak'): ?>
+                                <a href="<?= BASE_URL ?>/admin/pesanan/cetak_resi.php?order_id=<?= $order['id'] ?>" target="_blank" class="px-2 py-1 text-xs bg-green-500 text-white rounded-md hover:bg-green-600">Cetak Resi</a>
+                            <?php endif; ?>
+
+                            <form action="<?= BASE_URL ?>/admin/admin.php" method="POST">
+                                <input type="hidden" name="order_id" value="<?= $order['id'] ?>">
+                                <input type="hidden" name="current_page" value="<?= htmlspecialchars($_SERVER['REQUEST_URI']) ?>">
+                                <select name="status" class="text-xs border-gray-300 rounded-md shadow-sm">
+                                    <?php 
+                                    // PERBAIKAN: Tampilkan semua status yang relevan di dropdown, termasuk "Belum di Cetak"
+                                    $dropdown_statuses = $status_map;
+                                    unset($dropdown_statuses['semua']); // Hapus 'semua' karena bukan status valid untuk update
+                                    
+                                    foreach($dropdown_statuses as $key => $value): 
+                                    ?>
+                                    <option value="<?= $key ?>" <?= $order['status'] == $key ? 'selected' : '' ?>><?= $value ?></option>
+                                    <?php endforeach; ?>
+                                </select>
+                                <button type="submit" name="update_status" class="px-2 py-1 text-xs bg-indigo-600 text-white rounded-md hover:bg-indigo-700">Update</button>
+                            </form>
+                        </div>
                     </td>
                 </tr>
             <?php endforeach; ?>

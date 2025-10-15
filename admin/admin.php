@@ -11,11 +11,78 @@ check_admin();
 // Direktori untuk upload gambar
 define('UPLOAD_DIR_PRODUK', '../assets/images/produk/');
 define('UPLOAD_DIR_BANNER', '../assets/images/banner/');
-define('UPLOAD_DIR_SETTINGS', '../assets/images/settings/'); // Direktori baru untuk logo
+define('UPLOAD_DIR_SETTINGS', '../assets/images/settings/');
 
 if (!is_dir(UPLOAD_DIR_PRODUK)) mkdir(UPLOAD_DIR_PRODUK, 0777, true);
 if (!is_dir(UPLOAD_DIR_BANNER)) mkdir(UPLOAD_DIR_BANNER, 0777, true);
 if (!is_dir(UPLOAD_DIR_SETTINGS)) mkdir(UPLOAD_DIR_SETTINGS, 0777, true);
+
+// Fungsi helper untuk notifikasi (jika belum ada)
+function send_notification($conn, $user_id, $message) {
+    $stmt = $conn->prepare("INSERT INTO notifications (user_id, message) VALUES (?, ?)");
+    $stmt->bind_param("is", $user_id, $message);
+    $stmt->execute();
+    $stmt->close();
+}
+
+
+// --- LOGIKA UPDATE STATUS PESANAN ---
+if (isset($_POST['update_status'])) {
+    $order_id = (int)$_POST['order_id'];
+    $new_status = sanitize_input($_POST['status']);
+    $redirect_url = $_POST['current_page'] ?? '?page=pesanan';
+
+    // PERBAIKAN: Menghapus duplikasi BASE_URL dari URL redirect
+    if (defined('BASE_URL') && strpos($redirect_url, BASE_URL) === 0) {
+        $redirect_url = substr($redirect_url, strlen(BASE_URL));
+    }
+
+    // Ambil status saat ini dan user_id dari pesanan
+    $stmt_current = $conn->prepare("SELECT status, user_id FROM orders WHERE id = ?");
+    $stmt_current->bind_param("i", $order_id);
+    $stmt_current->execute();
+    $result_current = $stmt_current->get_result();
+    
+    if ($result_current->num_rows > 0) {
+        $order_data = $result_current->fetch_assoc();
+        $current_status = $order_data['status'];
+        $user_id = $order_data['user_id'];
+        
+        // --- LOGIKA BARU: Intersep perubahan status ---
+        // Jika admin menyetujui pembayaran (mengubah dari 'waiting_approval' ke 'processed'),
+        // maka status sebenarnya diubah menjadi 'belum_dicetak'.
+        if ($current_status == 'waiting_approval' && $new_status == 'processed') {
+            $final_status = 'belum_dicetak';
+            $notification_message = "Pembayaran untuk pesanan #WK{$order_id} telah disetujui dan pesanan Anda sedang disiapkan.";
+            
+            // Notifikasi untuk client statusnya 'disetujui'
+            send_notification($conn, $user_id, $notification_message);
+
+        } else {
+            $final_status = $new_status;
+            // Kirim notifikasi umum jika status berubah
+            if ($final_status != $current_status) {
+                $notification_message = "Status pesanan #WK{$order_id} Anda telah diperbarui menjadi: " . ucfirst(str_replace('_', ' ', $final_status));
+                send_notification($conn, $user_id, $notification_message);
+            }
+        }
+
+        $stmt_update = $conn->prepare("UPDATE orders SET status = ? WHERE id = ?");
+        $stmt_update->bind_param("si", $final_status, $order_id);
+        
+        if ($stmt_update->execute()) {
+            set_flash_message('success', 'Status pesanan berhasil diperbarui.');
+        } else {
+            set_flash_message('error', 'Gagal memperbarui status pesanan.');
+        }
+        $stmt_update->close();
+
+    } else {
+        set_flash_message('error', 'Pesanan tidak ditemukan.');
+    }
+
+    redirect($redirect_url);
+}
 
 
 // --- FUNGSI HELPER UNTUK UPDATE PENGATURAN ---
@@ -91,18 +158,8 @@ if (isset($_POST['delete_kategori'])) {
     redirect('/admin/admin.php?page=kategori');
 }
 
-// --- CRUD PRODUK (Tidak berubah) ---
-// ... (kode CRUD produk yang sudah ada) ...
-
-// --- CRUD USER (Tidak berubah) ---
-// ... (kode CRUD user yang sudah ada) ...
-
-// --- CRUD BANNER (Tidak berubah)---
-// ... (kode CRUD banner yang sudah ada) ...
-
-// --- LOGIKA PESANAN (Tidak berubah) ---
-// ... (kode logika pesanan yang sudah ada) ...
-
+// Sisa kode CRUD lainnya (produk, user, banner, dll) tetap sama
+// ...
 
 // --- Navigasi Halaman Admin ---
 $page = $_GET['page'] ?? 'dashboard';
@@ -132,7 +189,6 @@ $main_page = in_array($page, ['user', 'pengaturan']) ? 'users_settings' : $page;
                 <a href="?page=banner" class="flex items-center px-4 py-2 rounded-md hover:bg-gray-700 <?= $main_page == 'banner' ? 'bg-indigo-600' : '' ?>">Banner</a>
                 <a href="?page=pembayaran" class="flex items-center px-4 py-2 rounded-md hover:bg-gray-700 <?= $main_page == 'pembayaran' ? 'bg-indigo-600' : '' ?>">Pembayaran</a>
                 
-                <!-- Sub Menu Pengguna & Pengaturan -->
                 <details class="group" <?= $main_page == 'users_settings' ? 'open' : '' ?>>
                     <summary class="flex items-center justify-between px-4 py-2 rounded-md hover:bg-gray-700 cursor-pointer list-none">
                         <span>Pengguna & Pengaturan</span>
