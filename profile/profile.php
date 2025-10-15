@@ -2,17 +2,13 @@
 // File: profile/profile.php
 include '../config/config.php';
 include '../sistem/sistem.php';
+include '../partial/partial.php';
 
-// Wajibkan login untuk mengakses halaman ini
-if (!isset($_SESSION['user_id'])) {
-    redirect('/login/login.php');
-    exit;
-}
-
+check_login();
 $user_id = $_SESSION['user_id'];
 
-// --- PERBAIKAN: Mengganti 'total_amount' menjadi 'total' sesuai skema database ---
-$stmt = $conn->prepare("SELECT id, total, status, created_at FROM orders WHERE user_id = ? ORDER BY created_at DESC");
+// Query diupdate untuk mengambil order_hash
+$stmt = $conn->prepare("SELECT id, total, status, created_at, order_hash FROM orders WHERE user_id = ? ORDER BY created_at DESC");
 $stmt->bind_param("i", $user_id);
 $stmt->execute();
 $orders = $stmt->get_result();
@@ -30,24 +26,24 @@ $orders = $stmt->get_result();
 </head>
 <body class="bg-gray-50">
 
-    <?php include '../partial/partial.php'; ?>
-    <?= navbar() ?>
+    <?= navbar($conn) ?>
 
     <main class="container mx-auto px-4 py-8">
         <h1 class="text-3xl font-bold text-gray-800 mb-6">Profil Saya</h1>
         
         <div class="bg-white p-6 rounded-lg shadow-md">
             <h2 class="text-xl font-bold mb-4">Riwayat Pesanan</h2>
+            <?= flash_message('error') ?>
             <?php if ($orders->num_rows > 0): ?>
                 <div class="overflow-x-auto">
                     <table class="min-w-full divide-y divide-gray-200">
                         <thead class="bg-gray-50">
                             <tr>
-                                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Order ID</th>
-                                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Tanggal</th>
-                                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Total</th>
-                                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Status</th>
-                                <th class="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Aksi</th>
+                                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Order ID</th>
+                                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Tanggal</th>
+                                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Total</th>
+                                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Status</th>
+                                <th class="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase">Aksi</th>
                             </tr>
                         </thead>
                         <tbody class="bg-white divide-y divide-gray-200">
@@ -62,7 +58,16 @@ $orders = $stmt->get_result();
                                     </span>
                                 </td>
                                 <td class="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
-                                    <a href="#" class="text-indigo-600 hover:text-indigo-900">Detail</a>
+                                    <?php
+                                    // Hanya tampilkan link jika order_hash ada
+                                    if (!empty($order['order_hash'])) {
+                                        $detail_url = BASE_URL . '/checkout/invoice.php?order_hash=' . htmlspecialchars($order['order_hash']);
+                                        $link_text = ($order['status'] == 'waiting_payment') ? 'Bayar Sekarang' : 'Lihat Detail';
+                                        echo '<a href="' . $detail_url . '" class="text-indigo-600 hover:text-indigo-900">' . $link_text . '</a>';
+                                    } else {
+                                        echo '<span class="text-gray-400">N/A</span>'; // Untuk pesanan lama
+                                    }
+                                    ?>
                                 </td>
                             </tr>
                             <?php endwhile; ?>
@@ -75,7 +80,7 @@ $orders = $stmt->get_result();
         </div>
     </main>
 
-    <?= footer() ?>
+    <?= footer($conn) ?>
 
 </body>
 </html>

@@ -2,6 +2,7 @@
 // File: index.php
 include 'config/config.php';
 include 'sistem/sistem.php';
+include 'partial/partial.php';
 ?>
 <!DOCTYPE html>
 <html lang="id">
@@ -15,13 +16,10 @@ include 'sistem/sistem.php';
 </head>
 <body class="bg-gray-50">
 
-    <?php include 'partial/partial.php'; ?>
-
-    <?= navbar() ?>
+    <?= navbar($conn) ?>
 
     <main class="container mx-auto px-4 py-8">
         
-        <!-- PERBAIKAN: Tempat untuk menampilkan notifikasi -->
         <div class="mb-6">
             <?= flash_message('success') ?>
             <?= flash_message('error') ?>
@@ -29,7 +27,6 @@ include 'sistem/sistem.php';
         
         <?= banner_slide($conn) ?>
 
-        <!-- Section: Grid Kategori Produk -->
         <section id="kategori" class="my-12">
             <h2 class="text-2xl font-bold text-gray-800 mb-6">Kategori Pilihan</h2>
             <div class="grid grid-cols-2 sm:grid-cols-4 md:grid-cols-4 lg:grid-cols-4 gap-4 sm:gap-6">
@@ -38,14 +35,13 @@ include 'sistem/sistem.php';
                 while($category = $categories->fetch_assoc()):
                 ?>
                 <a href="<?= BASE_URL ?>/kategori/kategori.php?id=<?= $category['id'] ?>" class="group block bg-white rounded-lg shadow-sm p-4 text-center hover:shadow-lg transition-shadow">
-                    <img src="https://placehold.co/100x100/E2E8F0/4A5568?text=<?= htmlspecialchars($category['name']) ?>" alt="<?= htmlspecialchars($category['name']) ?>" class="mx-auto h-16 w-16 mb-2">
+                    <img src="https://placehold.co/100x100/E2E8F0/4A5568?text=<?= urlencode($category['name']) ?>" alt="<?= htmlspecialchars($category['name']) ?>" class="mx-auto h-16 w-16 mb-2 rounded-full object-cover">
                     <h3 class="text-sm font-semibold text-gray-700 group-hover:text-indigo-600"><?= htmlspecialchars($category['name']) ?></h3>
                 </a>
                 <?php endwhile; ?>
             </div>
         </section>
 
-        <!-- Section: Grid Produk -->
         <section id="produk">
             <h2 class="text-2xl font-bold text-gray-800 mb-6">Produk Terbaru</h2>
             <div class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-4 sm:gap-6">
@@ -71,29 +67,23 @@ include 'sistem/sistem.php';
 
     </main>
 
-    <?= footer() ?>
+    <?= footer($conn) ?>
     
     <script>
-        // Script untuk banner slide
         let currentSlide = 0;
         const slides = document.querySelectorAll("#slider .slide");
-        const totalSlides = slides.length;
-
-        function showSlide(index) {
-            slides.forEach((slide) => {
-                slide.classList.add('hidden');
-            });
-            slides[index].classList.remove('hidden');
-        }
-
-        function nextSlide() {
-            currentSlide = (currentSlide + 1) % totalSlides;
+        if (slides.length > 0) {
+            const totalSlides = slides.length;
+            const showSlide = (index) => {
+                slides.forEach((slide) => slide.classList.add('hidden'));
+                slides[index].classList.remove('hidden');
+            };
+            const nextSlide = () => {
+                currentSlide = (currentSlide + 1) % totalSlides;
+                showSlide(currentSlide);
+            };
             showSlide(currentSlide);
-        }
-
-        if (totalSlides > 0) {
-            showSlide(currentSlide);
-            setInterval(nextSlide, 3000); // Ganti slide setiap 3 detik
+            setInterval(nextSlide, 3000);
         }
     </script>
 </body>

@@ -3,13 +3,24 @@
 include '../config/config.php';
 include '../sistem/sistem.php';
 include '../partial/partial.php';
-check_login();
 
-// Logika untuk mengambil notifikasi (contoh statis)
-$notifications = [
-    ['message' => 'Pesanan #WK101 telah dikirim.', 'time' => '2 jam yang lalu', 'read' => false],
-    ['message' => 'Pembayaran untuk pesanan #WK101 telah dikonfirmasi.', 'time' => '1 hari yang lalu', 'read' => true],
-];
+check_login();
+$user_id = $_SESSION['user_id'];
+
+// 1. Ambil semua notifikasi untuk pengguna ini
+$stmt = $conn->prepare("SELECT id, message, created_at, is_read FROM notifications WHERE user_id = ? ORDER BY created_at DESC");
+$stmt->bind_param("i", $user_id);
+$stmt->execute();
+$result = $stmt->get_result();
+$notifications = [];
+while($row = $result->fetch_assoc()) {
+    $notifications[] = $row;
+}
+$stmt->close();
+
+// 2. Tandai semua notifikasi sebagai "sudah dibaca"
+$conn->query("UPDATE notifications SET is_read = 1 WHERE user_id = $user_id AND is_read = 0");
+
 ?>
 <!DOCTYPE html>
 <html lang="id">
@@ -22,7 +33,7 @@ $notifications = [
     <style>body { font-family: 'Inter', sans-serif; }</style>
 </head>
 <body class="bg-gray-50">
-    <?php navbar(); ?>
+    <?= navbar($conn) ?>
     <main class="container mx-auto px-4 sm:px-6 lg:px-8 py-8">
         <h1 class="text-3xl font-bold text-gray-800 mb-8">Notifikasi</h1>
         <div class="bg-white rounded-lg shadow-md">
@@ -31,7 +42,7 @@ $notifications = [
                     <li class="p-6 text-center text-gray-500">Tidak ada notifikasi baru.</li>
                 <?php else: ?>
                     <?php foreach($notifications as $notif): ?>
-                        <li class="p-4 sm:p-6 hover:bg-gray-50 <?= !$notif['read'] ? 'bg-indigo-50' : '' ?>">
+                        <li class="p-4 sm:p-6 hover:bg-gray-50 <?= !$notif['is_read'] ? 'bg-indigo-50' : '' ?>">
                             <div class="flex items-start space-x-4">
                                 <div class="flex-shrink-0">
                                     <div class="h-10 w-10 rounded-full bg-indigo-100 flex items-center justify-center">
@@ -39,8 +50,8 @@ $notifications = [
                                     </div>
                                 </div>
                                 <div class="flex-1">
-                                    <p class="text-sm text-gray-800"><?= $notif['message'] ?></p>
-                                    <p class="text-xs text-gray-500 mt-1"><?= $notif['time'] ?></p>
+                                    <p class="text-sm text-gray-800"><?= htmlspecialchars($notif['message']) ?></p>
+                                    <p class="text-xs text-gray-500 mt-1"><?= date('d M Y, H:i', strtotime($notif['created_at'])) ?></p>
                                 </div>
                             </div>
                         </li>
@@ -49,6 +60,6 @@ $notifications = [
             </ul>
         </div>
     </main>
-    <?php footer(); ?>
+    <?= footer($conn) ?>
 </body>
 </html>

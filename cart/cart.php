@@ -2,6 +2,7 @@
 // File: cart/cart.php
 include '../config/config.php';
 include '../sistem/sistem.php';
+include '../partial/partial.php'; // Include partial di sini
 
 $is_logged_in = isset($_SESSION['user_id']);
 $user_id = $is_logged_in ? $_SESSION['user_id'] : null;
@@ -57,9 +58,6 @@ if ($action == 'add' && isset($_POST['product_id'])) {
         set_flash_message('error', 'Produk tidak valid.');
     }
     
-    // --- PERBAIKAN UTAMA ---
-    // Gunakan header() secara langsung karena HTTP_REFERER sudah merupakan URL lengkap.
-    // Ini mencegah penggabungan ganda dengan BASE_URL oleh fungsi redirect().
     $redirect_url = $_SERVER['HTTP_REFERER'] ?? BASE_URL;
     header('Location: ' . $redirect_url);
     exit;
@@ -145,8 +143,7 @@ if ($is_logged_in) {
 </head>
 <body class="bg-gray-50">
 
-    <?php include '../partial/partial.php'; ?>
-    <?= navbar() ?>
+    <?= navbar($conn) ?>
 
     <main class="container mx-auto px-4 py-8">
         <h1 class="text-3xl font-bold text-gray-800 mb-6">Keranjang Belanja Anda</h1>
@@ -202,6 +199,6 @@ if ($is_logged_in) {
         <?php endif; ?>
     </main>
 
-    <?= footer() ?>
+    <?= footer($conn) ?>
 </body>
 </html>

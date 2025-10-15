@@ -8,23 +8,20 @@ if (session_status() == PHP_SESSION_NONE) {
 
 /**
  * Mengarahkan pengguna ke halaman lain dengan aman menggunakan BASE_URL.
- * Ini adalah perbaikan utama untuk masalah redirect.
  * @param string $url URL tujuan (misal: '/login/login.php' atau '/')
  */
 function redirect($url) {
-    // Pastikan BASE_URL sudah didefinisikan di config.php
     if (!defined('BASE_URL')) {
         die("Kesalahan Kritis: BASE_URL tidak terdefinisi. Periksa file config/config.php");
     }
     
-    // Pastikan URL tujuan diawali dengan slash
     if (substr($url, 0, 1) !== '/') {
         $url = '/' . $url;
     }
 
     $location = BASE_URL . $url;
     header("Location: " . $location);
-    exit(); // Wajib untuk menghentikan eksekusi skrip setelah redirect
+    exit();
 }
 
 /**
@@ -57,7 +54,7 @@ function flash_message($name) {
     if (isset($_SESSION['flash_' . $name])) {
         $message = $_SESSION['flash_' . $name];
         unset($_SESSION['flash_' . $name]);
-        $alert_type = (strpos($name, 'success') !== false) ? 'green' : 'red';
+        $alert_type = (strpos($name, 'success') !== false) ? 'green' : ((strpos($name, 'info') !== false) ? 'blue' : 'red');
         return '<div class="p-4 mb-4 text-sm text-' . $alert_type . '-700 bg-' . $alert_type . '-100 rounded-lg" role="alert">' . $message . '</div>';
     }
     return '';
@@ -86,11 +83,35 @@ function check_login() {
  * Memeriksa apakah user adalah admin, jika bukan, redirect ke halaman utama.
  */
 function check_admin() {
-    check_login(); // Pastikan sudah login dulu
+    check_login();
     if (!isset($_SESSION['role']) || $_SESSION['role'] !== 'admin') {
         set_flash_message('auth_error', 'Anda tidak memiliki hak akses ke halaman admin.');
         redirect('/');
     }
 }
 
-?>
+/**
+ * Mengambil nilai pengaturan dari database dengan caching.
+ * PERBAIKAN: Urutan parameter diubah menjadi ($key, $conn) agar konsisten.
+ * @param string $key Kunci pengaturan.
+ * @param mysqli $conn Objek koneksi database.
+ * @return string|null Nilai pengaturan atau null.
+ */
+function get_setting($key, $conn) {
+    // Inisialisasi variabel statis untuk cache agar query tidak berulang-ulang
+    static $settings = null;
+
+    // Jika pengaturan belum di-cache, ambil dari DB
+    if ($settings === null) {
+        $settings = [];
+        $result = $conn->query("SELECT setting_key, setting_value FROM settings");
+        if ($result) {
+            while ($row = $result->fetch_assoc()) {
+                $settings[$row['setting_key']] = $row['setting_value'];
+            }
+        }
+    }
+
+    // Kembalikan nilai dari cache
+    return $settings[$key] ?? null;
+}
