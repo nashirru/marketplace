@@ -2,7 +2,6 @@
 // File: product/product.php
 include '../config/config.php';
 include '../sistem/sistem.php';
-include '../partial/partial.php'; // Include partial di sini
 
 // Cek apakah ada ID produk
 if (!isset($_GET['id'])) {
@@ -22,9 +21,7 @@ $stmt->execute();
 $result = $stmt->get_result();
 
 if ($result->num_rows === 0) {
-    // Sebaiknya buat halaman 404, untuk sekarang redirect saja
-    set_flash_message('error', 'Produk yang Anda cari tidak ditemukan.');
-    redirect('/');
+    echo "Produk tidak ditemukan.";
     exit;
 }
 
@@ -44,6 +41,7 @@ $stmt->close();
 </head>
 <body class="bg-gray-50">
 
+    <?php include '../partial/partial.php'; ?>
     <?= navbar($conn) ?>
 
     <main class="container mx-auto px-4 py-8">
@@ -63,7 +61,7 @@ $stmt->close();
 
                 <!-- Info Produk -->
                 <div>
-                    <a href="<?= BASE_URL ?>/kategori/kategori.php?id=<?= $product['category_id'] ?>" class="text-sm text-indigo-600 font-medium"><?= htmlspecialchars($product['category_name']) ?></a>
+                    <a href="#" class="text-sm text-indigo-600 font-medium"><?= htmlspecialchars($product['category_name']) ?></a>
                     
                     <h1 class="text-3xl font-bold text-gray-800 mt-2"><?= htmlspecialchars($product['name']) ?></h1>
                     
@@ -82,31 +80,25 @@ $stmt->close();
                     <div class="mt-6">
                         <p class="text-sm text-gray-600 mb-2">Stok Tersedia: <span class="font-semibold"><?= $product['stock'] ?></span></p>
                         
-                        <?php if ($product['stock'] > 0): ?>
-                            <form action="<?= BASE_URL ?>/cart/cart.php" method="POST">
-                                <input type="hidden" name="product_id" value="<?= $product['id'] ?>">
-                                <input type="hidden" name="action" value="add">
-                                
-                                <div class="flex items-center gap-4">
-                                   <label for="quantity" class="text-sm">Jumlah:</label>
-                                   <input type="number" id="quantity" name="quantity" value="1" min="1" max="<?= $product['stock'] ?>" class="w-20 border-gray-300 rounded-md">
-                                   <button type="submit" class="flex-1 px-6 py-3 bg-indigo-600 text-white font-semibold rounded-lg hover:bg-indigo-700 transition-colors">
-                                      Tambah ke Keranjang
-                                   </button>
-                                </div>
-                            </form>
-                        <?php else: ?>
-                            <div class="mt-4 p-4 bg-red-100 text-red-700 rounded-lg text-center">
-                                Stok produk ini telah habis.
+                        <form action="<?= BASE_URL ?>/cart/cart.php" method="POST">
+                            <input type="hidden" name="product_id" value="<?= $product['id'] ?>">
+                            <input type="hidden" name="action" value="add">
+                            
+                            <div class="flex items-center gap-4">
+                               <label for="quantity" class="text-sm">Jumlah:</label>
+                               <input type="number" id="quantity" name="quantity" value="1" min="1" max="<?= $product['stock'] ?>" class="w-20 border-gray-300 rounded-md">
+                               <button type="submit" class="flex-1 px-6 py-3 bg-indigo-600 text-white font-semibold rounded-lg hover:bg-indigo-700 transition-colors">
+                                  Tambah ke Keranjang
+                               </button>
                             </div>
-                        <?php endif; ?>
+                        </form>
                     </div>
                 </div>
             </div>
         </div>
     </main>
 
-    <?= footer($conn) ?>
+    <?= footer() ?>
 
 </body>
 </html>

@@ -2,7 +2,6 @@
 // File: cart/cart.php
 include '../config/config.php';
 include '../sistem/sistem.php';
-include '../partial/partial.php'; // Include partial di sini
 
 $is_logged_in = isset($_SESSION['user_id']);
 $user_id = $is_logged_in ? $_SESSION['user_id'] : null;
@@ -13,7 +12,6 @@ if ($action == 'add' && isset($_POST['product_id'])) {
     $product_id = sanitize_input($_POST['product_id']);
     $quantity = isset($_POST['quantity']) ? (int)$_POST['quantity'] : 1;
 
-    // Cek stok produk
     $stock_res = $conn->query("SELECT stock FROM products WHERE id = $product_id");
     if ($stock_res->num_rows > 0) {
         $stock = $stock_res->fetch_assoc()['stock'];
@@ -76,7 +74,7 @@ if (($action == 'update' || $action == 'remove') && isset($_POST['product_id']))
                  $stmt = $conn->prepare("UPDATE cart SET quantity = ? WHERE user_id = ? AND product_id = ?");
                  $stmt->bind_param("iii", $quantity, $user_id, $product_id);
                  $stmt->execute();
-            } else { // Jika kuantitas 0 atau kurang, hapus item
+            } else { 
                  $stmt = $conn->prepare("DELETE FROM cart WHERE user_id = ? AND product_id = ?");
                  $stmt->bind_param("ii", $user_id, $product_id);
                  $stmt->execute();
@@ -143,6 +141,7 @@ if ($is_logged_in) {
 </head>
 <body class="bg-gray-50">
 
+    <?php include '../partial/partial.php'; ?>
     <?= navbar($conn) ?>
 
     <main class="container mx-auto px-4 py-8">
@@ -199,6 +198,6 @@ if ($is_logged_in) {
         <?php endif; ?>
     </main>
 
-    <?= footer($conn) ?>
+    <?= footer() ?>
 </body>
 </html>

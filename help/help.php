@@ -15,7 +15,7 @@ include '../partial/partial.php';
     <style>body { font-family: 'Inter', sans-serif; }</style>
 </head>
 <body class="bg-gray-50">
-    <?php navbar(); ?>
+    <?php navbar($conn); ?>
 
     <main class="container mx-auto px-4 sm:px-6 lg:px-8 py-8">
         <div class="text-center">

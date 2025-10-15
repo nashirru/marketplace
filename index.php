@@ -2,7 +2,6 @@
 // File: index.php
 include 'config/config.php';
 include 'sistem/sistem.php';
-include 'partial/partial.php';
 ?>
 <!DOCTYPE html>
 <html lang="id">
@@ -16,6 +15,8 @@ include 'partial/partial.php';
 </head>
 <body class="bg-gray-50">
 
+    <?php include 'partial/partial.php'; ?>
+
     <?= navbar($conn) ?>
 
     <main class="container mx-auto px-4 py-8">
@@ -23,6 +24,7 @@ include 'partial/partial.php';
         <div class="mb-6">
             <?= flash_message('success') ?>
             <?= flash_message('error') ?>
+            <?= flash_message('info') ?>
         </div>
         
         <?= banner_slide($conn) ?>
@@ -35,7 +37,7 @@ include 'partial/partial.php';
                 while($category = $categories->fetch_assoc()):
                 ?>
                 <a href="<?= BASE_URL ?>/kategori/kategori.php?id=<?= $category['id'] ?>" class="group block bg-white rounded-lg shadow-sm p-4 text-center hover:shadow-lg transition-shadow">
-                    <img src="https://placehold.co/100x100/E2E8F0/4A5568?text=<?= urlencode($category['name']) ?>" alt="<?= htmlspecialchars($category['name']) ?>" class="mx-auto h-16 w-16 mb-2 rounded-full object-cover">
+                    <img src="https://placehold.co/100x100/E2E8F0/4A5568?text=<?= htmlspecialchars($category['name']) ?>" alt="<?= htmlspecialchars($category['name']) ?>" class="mx-auto h-16 w-16 mb-2">
                     <h3 class="text-sm font-semibold text-gray-700 group-hover:text-indigo-600"><?= htmlspecialchars($category['name']) ?></h3>
                 </a>
                 <?php endwhile; ?>
@@ -67,23 +69,32 @@ include 'partial/partial.php';
 
     </main>
 
-    <?= footer($conn) ?>
+    <?= footer() ?>
     
     <script>
         let currentSlide = 0;
         const slides = document.querySelectorAll("#slider .slide");
-        if (slides.length > 0) {
-            const totalSlides = slides.length;
-            const showSlide = (index) => {
-                slides.forEach((slide) => slide.classList.add('hidden'));
+        const totalSlides = slides.length;
+
+        function showSlide(index) {
+            slides.forEach((slide) => {
+                slide.classList.add('hidden');
+            });
+            if (slides[index]) {
                 slides[index].classList.remove('hidden');
-            };
-            const nextSlide = () => {
-                currentSlide = (currentSlide + 1) % totalSlides;
-                showSlide(currentSlide);
-            };
+            }
+        }
+
+        function nextSlide() {
+            currentSlide = (currentSlide + 1) % totalSlides;
+            showSlide(currentSlide);
+        }
+
+        if (totalSlides > 1) {
             showSlide(currentSlide);
             setInterval(nextSlide, 3000);
+        } else if (totalSlides === 1) {
+            showSlide(0);
         }
     </script>
 </body>

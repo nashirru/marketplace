@@ -14,11 +14,9 @@ function redirect($url) {
     if (!defined('BASE_URL')) {
         die("Kesalahan Kritis: BASE_URL tidak terdefinisi. Periksa file config/config.php");
     }
-    
     if (substr($url, 0, 1) !== '/') {
         $url = '/' . $url;
     }
-
     $location = BASE_URL . $url;
     header("Location: " . $location);
     exit();
@@ -54,8 +52,13 @@ function flash_message($name) {
     if (isset($_SESSION['flash_' . $name])) {
         $message = $_SESSION['flash_' . $name];
         unset($_SESSION['flash_' . $name]);
-        $alert_type = (strpos($name, 'success') !== false) ? 'green' : ((strpos($name, 'info') !== false) ? 'blue' : 'red');
-        return '<div class="p-4 mb-4 text-sm text-' . $alert_type . '-700 bg-' . $alert_type . '-100 rounded-lg" role="alert">' . $message . '</div>';
+        
+        $alert_type = 'indigo'; // Default
+        if (strpos($name, 'success') !== false) $alert_type = 'green';
+        elseif (strpos($name, 'error') !== false) $alert_type = 'red';
+        elseif (strpos($name, 'info') !== false) $alert_type = 'blue';
+
+        return '<div class="p-4 mb-4 text-sm text-' . $alert_type . '-800 bg-' . $alert_type . '-100 rounded-lg" role="alert">' . htmlspecialchars($message) . '</div>';
     }
     return '';
 }
@@ -90,28 +93,37 @@ function check_admin() {
     }
 }
 
-/**
- * Mengambil nilai pengaturan dari database dengan caching.
- * PERBAIKAN: Urutan parameter diubah menjadi ($key, $conn) agar konsisten.
- * @param string $key Kunci pengaturan.
- * @param mysqli $conn Objek koneksi database.
- * @return string|null Nilai pengaturan atau null.
- */
-function get_setting($key, $conn) {
-    // Inisialisasi variabel statis untuk cache agar query tidak berulang-ulang
-    static $settings = null;
+// --- FUNGSI BARU UNTUK PENGATURAN ---
 
-    // Jika pengaturan belum di-cache, ambil dari DB
-    if ($settings === null) {
-        $settings = [];
+/**
+ * @var array Cache untuk menyimpan pengaturan dari database.
+ */
+$settings_cache = [];
+
+/**
+ * Memuat semua pengaturan dari database ke dalam cache.
+ * @param mysqli $conn Objek koneksi database.
+ */
+function load_settings($conn) {
+    global $settings_cache;
+    if (empty($settings_cache)) {
         $result = $conn->query("SELECT setting_key, setting_value FROM settings");
         if ($result) {
             while ($row = $result->fetch_assoc()) {
-                $settings[$row['setting_key']] = $row['setting_value'];
+                $settings_cache[$row['setting_key']] = $row['setting_value'];
             }
         }
     }
-
-    // Kembalikan nilai dari cache
-    return $settings[$key] ?? null;
 }
+
+/**
+ * Mengambil nilai pengaturan dari cache.
+ * @param string $key Kunci pengaturan (contoh: 'store_logo').
+ * @param mixed $default Nilai default jika kunci tidak ditemukan.
+ * @return mixed Nilai pengaturan.
+ */
+function get_setting($key, $default = null) {
+    global $settings_cache;
+    return $settings_cache[$key] ?? $default;
+}
+?>
