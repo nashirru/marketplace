@@ -1,142 +1,247 @@
 <?php
-// File: checkout/invoice.php
-include '../config/config.php';
-include '../sistem/sistem.php';
+// File: checkout/invoice.php - Halaman Tampilan Invoice
+
+require_once '../config/config.php'; 
+require_once '../sistem/sistem.php';
+require_once '../partial/partial.php';
+
+check_login();
+
+// Memuat pengaturan toko ke cache
 load_settings($conn);
 
-// Periksa apakah hash pesanan ada
-if (!isset($_GET['hash'])) {
-    die("Error: Invoice tidak ditemukan.");
+$store_name = get_setting($conn, 'store_name') ?? 'Warok Kite';
+$store_address = get_setting($conn, 'store_address') ?? 'Ponorogo, Jawa Timur';
+$store_phone = get_setting($conn, 'store_phone') ?? '0812-3456-7890';
+$store_logo = get_setting($conn, 'store_logo') ?? 'placeholder.png';
+
+// ✅ PERBAIKAN: Mengambil 'hash' dari URL
+$order_hash = $_GET['hash'] ?? '';
+$user_id = $_SESSION['user_id'] ?? 0;
+
+// Ambil Data Pesanan
+$order_data = null;
+$order_items = [];
+
+if (!empty($order_hash)) {
+    // ✅ PERBAIKAN: Query menggunakan 'order_hash' bukan 'order_uid'
+    $stmt_order = $conn->prepare("
+        SELECT 
+            o.*, 
+            pm.name AS payment_method_name
+        FROM orders o
+        LEFT JOIN payment_methods pm ON o.payment_method_id = pm.id
+        WHERE o.order_hash = ? AND o.user_id = ?
+    ");
+    $stmt_order->bind_param("si", $order_hash, $user_id);
+    $stmt_order->execute();
+    $result_order = $stmt_order->get_result();
+
+    if ($result_order && $result_order->num_rows > 0) {
+        $order_data = $result_order->fetch_assoc();
+
+        // Ambil item-item pesanan
+        $stmt_items = $conn->prepare("
+            SELECT oi.*, p.name AS product_name 
+            FROM order_items oi
+            JOIN products p ON oi.product_id = p.id
+            WHERE oi.order_id = ?
+        ");
+        $stmt_items->bind_param("i", $order_data['id']);
+        $stmt_items->execute();
+        $result_items = $stmt_items->get_result();
+        while ($row = $result_items->fetch_assoc()) {
+            $order_items[] = $row;
+        }
+        $stmt_items->close();
+    }
+    $stmt_order->close();
 }
 
-$order_hash = sanitize_input($_GET['hash']);
-
-// Ambil data pesanan utama
-$stmt = $conn->prepare("SELECT * FROM orders WHERE order_hash = ?");
-$stmt->bind_param("s", $order_hash);
-$stmt->execute();
-$result = $stmt->get_result();
-if ($result->num_rows === 0) {
-    die("Error: Invoice tidak valid.");
+// Jika pesanan tidak ditemukan
+if (!$order_data) {
+    set_flashdata('error', 'Pesanan tidak ditemukan atau Anda tidak memiliki akses.');
+    redirect('/profile/profile.php');
 }
-$order = $result->fetch_assoc();
-$stmt->close();
 
-// Ambil item pesanan
-$stmt_items = $conn->prepare("
-    SELECT oi.quantity, oi.price, p.name 
-    FROM order_items oi 
-    JOIN products p ON oi.product_id = p.id 
-    WHERE oi.order_id = ?
-");
-$stmt_items->bind_param("i", $order['id']);
-$stmt_items->execute();
-$order_items = $stmt_items->get_result();
-$stmt_items->close();
+// Format status untuk ditampilkan
+$status_label = [
+    'waiting_payment' => 'Menunggu Pembayaran',
+    'waiting_approval' => 'Menunggu Verifikasi',
+    'belum_dicetak' => 'Belum Dicetak',
+    'processed' => 'Diproses',
+    'shipped' => 'Dikirim',
+    'completed' => 'Selesai',
+    'cancelled' => 'Dibatalkan'
+];
 
+$status_display = $status_label[$order_data['status']] ?? $order_data['status'];
 ?>
 <!DOCTYPE html>
 <html lang="id">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Invoice #WK<?= $order['id'] ?></title>
+    <title>Invoice #<?= htmlspecialchars($order_data['order_number']) ?></title>
     <script src="https://cdn.tailwindcss.com"></script>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css">
     <style>
-        body { font-family: 'Inter', sans-serif; }
         @media print {
-            .no-print { display: none; }
-            body { -webkit-print-color-adjust: exact; }
+            .no-print { display: none !important; }
+            body { background-color: white; }
+            .invoice-box { box-shadow: none !important; border: none !important; }
         }
     </style>
 </head>
-<body class="bg-gray-100">
-    <div class="container mx-auto max-w-4xl p-4 sm:p-8">
-        <div class="bg-white p-8 rounded-lg shadow-lg">
-            <!-- Header -->
-            <div class="flex justify-between items-start mb-8">
-                <div>
-                    <h1 class="text-3xl font-bold text-gray-800">INVOICE</h1>
-                    <p class="text-gray-500">Invoice #: <span class="font-semibold">WK<?= $order['id'] ?></span></p>
-                    <p class="text-gray-500">Tanggal: <span class="font-semibold"><?= date('d F Y', strtotime($order['created_at'])) ?></span></p>
+<body class="bg-gray-50">
+    <div class="no-print">
+        <?php navbar($conn); ?>
+    </div>
+    
+    <div class="py-12 px-4">
+        <div class="invoice-box max-w-4xl mx-auto bg-white p-8 rounded-lg shadow-lg">
+            <!-- Header Invoice -->
+            <header class="flex justify-between items-start border-b pb-6 mb-6">
+                <div class="logo-info">
+                    <img src="<?= BASE_URL ?>/assets/images/settings/<?= htmlspecialchars($store_logo) ?>" 
+                         style="width: 90px; max-width: 300px;" alt="<?= htmlspecialchars($store_name) ?>">
+                    <h1 class="text-2xl font-bold text-indigo-800 mt-2"><?= htmlspecialchars($store_name) ?></h1>
+                    <p class="text-xs text-gray-500"><?= htmlspecialchars($store_address) ?></p>
+                    <p class="text-xs text-gray-500">Telp: <?= htmlspecialchars($store_phone) ?></p>
                 </div>
                 <div class="text-right">
-                    <?php 
-                        $logo_filename = get_setting('store_logo');
-                        $logo_url = $logo_filename ? BASE_URL . '/assets/images/settings/' . $logo_filename : "https://placehold.co/150x40/374151/FFFFFF?text=WarokKite";
-                    ?>
-                    <img src="<?= $logo_url ?>" alt="Logo Toko" class="h-12 object-contain">
+                    <h2 class="text-3xl font-extrabold text-gray-800">INVOICE</h2>
+                    <p class="text-base text-gray-600 font-semibold mt-1">#<?= htmlspecialchars($order_data['order_number']) ?></p>
+                    <p class="text-sm text-gray-500">Tanggal: <?= date('d M Y', strtotime($order_data['created_at'])) ?></p>
                 </div>
-            </div>
+            </header>
 
-            <!-- Detail Alamat -->
-            <div class="grid sm:grid-cols-2 gap-4 mb-8">
+            <!-- Informasi Pembeli dan Alamat -->
+            <section class="grid grid-cols-2 gap-8 mb-8">
                 <div>
-                    <h2 class="font-semibold text-gray-700 mb-1">Ditagihkan Kepada:</h2>
-                    <p class="text-gray-600"><?= htmlspecialchars($order['full_name']) ?></p>
-                    <p class="text-gray-600"><?= nl2br(htmlspecialchars($order['address_line_1'])) ?></p>
-                    <?php if (!empty($order['address_line_2'])): ?>
-                        <p class="text-gray-600"><?= htmlspecialchars($order['address_line_2']) ?></p>
+                    <h3 class="text-lg font-semibold text-indigo-700 mb-2">Informasi Pembeli</h3>
+                    <p class="font-bold text-gray-800"><?= htmlspecialchars($_SESSION['user_name'] ?? 'User') ?></p>
+                    <p class="text-gray-600"><?= htmlspecialchars($order_data['email'] ?? 'Email tidak tersedia') ?></p>
+                </div>
+                <div>
+                    <h3 class="text-lg font-semibold text-indigo-700 mb-2">Alamat Pengiriman</h3>
+                    <!-- Data diambil langsung dari tabel orders -->
+                    <p class="font-bold text-gray-800"><?= htmlspecialchars($order_data['full_name']) ?></p>
+                    <p class="text-gray-600"><?= htmlspecialchars($order_data['address_line_1']) ?></p>
+                    <?php if (!empty($order_data['address_line_2'])): ?>
+                        <p class="text-gray-600"><?= htmlspecialchars($order_data['address_line_2']) ?></p>
                     <?php endif; ?>
-                    <p class="text-gray-600"><?= htmlspecialchars($order['subdistrict']) ?>, <?= htmlspecialchars($order['city']) ?></p>
-                    <p class="text-gray-600"><?= htmlspecialchars($order['province']) ?>, <?= htmlspecialchars($order['postal_code']) ?></p>
-                    <p class="text-gray-600">Telp: <?= htmlspecialchars($order['phone_number']) ?></p>
+                    <p class="text-gray-600">
+                        <?= htmlspecialchars($order_data['subdistrict']) ?>, 
+                        <?= htmlspecialchars($order_data['city']) ?>, 
+                        <?= htmlspecialchars($order_data['province']) ?> 
+                        <?= htmlspecialchars($order_data['postal_code']) ?>
+                    </p>
+                    <p class="text-gray-600">Telp: <?= htmlspecialchars($order_data['phone_number']) ?></p>
                 </div>
-            </div>
+            </section>
 
-            <!-- Tabel Item -->
-            <div class="overflow-x-auto">
-                <table class="min-w-full divide-y divide-gray-200">
-                    <thead class="bg-gray-50">
-                        <tr>
-                            <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Produk</th>
-                            <th scope="col" class="px-6 py-3 text-center text-xs font-medium text-gray-500 uppercase">Jumlah</th>
-                            <th scope="col" class="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase">Harga Satuan</th>
-                            <th scope="col" class="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase">Subtotal</th>
-                        </tr>
-                    </thead>
-                    <tbody class="bg-white divide-y divide-gray-200">
-                        <?php while ($item = $order_items->fetch_assoc()): ?>
-                        <tr>
-                            <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-800"><?= htmlspecialchars($item['name']) ?></td>
-                            <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500 text-center"><?= $item['quantity'] ?></td>
-                            <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500 text-right"><?= format_rupiah($item['price']) ?></td>
-                            <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-800 text-right font-semibold"><?= format_rupiah($item['price'] * $item['quantity']) ?></td>
-                        </tr>
-                        <?php endwhile; ?>
-                    </tbody>
-                </table>
-            </div>
+            <!-- Detail Item Pesanan -->
+            <section class="mb-8">
+                <h3 class="text-lg font-semibold text-indigo-700 mb-3">Detail Pesanan</h3>
+                <div class="overflow-x-auto rounded-lg border border-gray-200 shadow-sm">
+                    <table class="min-w-full divide-y divide-gray-200">
+                        <thead class="bg-indigo-50">
+                            <tr>
+                                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Produk</th>
+                                <th class="px-6 py-3 text-center text-xs font-medium text-gray-500 uppercase">Harga</th>
+                                <th class="px-6 py-3 text-center text-xs font-medium text-gray-500 uppercase">Qty</th>
+                                <th class="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase">Subtotal</th>
+                            </tr>
+                        </thead>
+                        <tbody class="bg-white divide-y divide-gray-200">
+                            <?php 
+                            $total_amount = 0;
+                            foreach ($order_items as $item): 
+                                $subtotal_item = $item['price'] * $item['quantity'];
+                                $total_amount += $subtotal_item;
+                            ?>
+                            <tr>
+                                <td class="px-6 py-4 text-sm font-medium text-gray-900"><?= htmlspecialchars($item['product_name']) ?></td>
+                                <td class="px-6 py-4 text-sm text-center text-gray-500"><?= format_rupiah($item['price']) ?></td>
+                                <td class="px-6 py-4 text-sm text-center text-gray-500"><?= $item['quantity'] ?></td>
+                                <td class="px-6 py-4 text-sm text-right font-semibold text-gray-700"><?= format_rupiah($subtotal_item) ?></td>
+                            </tr>
+                            <?php endforeach; ?>
+                        </tbody>
+                    </table>
+                </div>
+            </section>
 
-            <!-- Total -->
-            <div class="flex justify-end mt-6">
-                <div class="w-full max-w-xs">
-                    <div class="flex justify-between text-gray-600">
-                        <span>Subtotal</span>
-                        <span><?= format_rupiah($order['total']) ?></span>
-                    </div>
-                     <div class="flex justify-between text-gray-600 mt-2">
-                        <span>Biaya Pengiriman</span>
-                        <span>-</span>
-                    </div>
-                    <div class="flex justify-between font-bold text-gray-800 text-lg border-t pt-2 mt-2">
-                        <span>Total</span>
-                        <span><?= format_rupiah($order['total']) ?></span>
+            <!-- Ringkasan Pembayaran dan Status -->
+            <section class="grid grid-cols-2 gap-8 mb-8">
+                <div>
+                    <h3 class="text-lg font-semibold text-indigo-700 mb-3">Ringkasan Pembayaran</h3>
+                    <div class="space-y-2">
+                        <div class="flex justify-between text-gray-700">
+                            <span>Subtotal Produk:</span>
+                            <span class="font-semibold"><?= format_rupiah($total_amount) ?></span>
+                        </div>
+                        <div class="flex justify-between text-gray-700 border-b pb-2">
+                            <span>Biaya Pengiriman:</span>
+                            <span class="font-semibold">Gratis</span>
+                        </div>
+                        <div class="flex justify-between text-xl font-bold text-indigo-800 pt-2">
+                            <span>Total Pembayaran:</span>
+                            <span><?= format_rupiah($order_data['total']) ?></span>
+                        </div>
                     </div>
                 </div>
-            </div>
-
-            <!-- Footer & Tombol Cetak -->
-            <div class="border-t mt-8 pt-6">
-                <p class="text-center text-sm text-gray-500">Terima kasih telah berbelanja di Warok Kite!</p>
-                <div class="flex justify-center mt-4 no-print">
-                    <button onclick="window.print()" class="px-6 py-2 bg-indigo-600 text-white font-semibold rounded-lg hover:bg-indigo-700 transition-colors">
-                        Cetak Invoice
-                    </button>
+                <div class="text-right">
+                    <div class="mb-4">
+                        <p class="text-sm font-semibold text-gray-700 mb-1">Status Pesanan:</p>
+                        <span class="inline-block px-4 py-2 rounded-lg text-lg font-bold
+                            <?php 
+                                if (in_array($order_data['status'], ['waiting_payment', 'waiting_approval'])) 
+                                    echo 'bg-yellow-100 text-yellow-700';
+                                elseif (in_array($order_data['status'], ['completed'])) 
+                                    echo 'bg-green-100 text-green-700';
+                                elseif ($order_data['status'] == 'cancelled') 
+                                    echo 'bg-red-100 text-red-700';
+                                else 
+                                    echo 'bg-blue-100 text-blue-700';
+                            ?>
+                        ">
+                            <?= htmlspecialchars($status_display) ?>
+                        </span>
+                    </div>
+                    <div>
+                        <p class="text-sm font-semibold text-gray-700">Metode Pembayaran:</p>
+                        <p class="text-lg font-bold text-gray-800"><?= htmlspecialchars($order_data['payment_method_name'] ?? 'Transfer Bank') ?></p>
+                    </div>
                 </div>
+            </section>
+
+            <!-- Bukti Pembayaran -->
+            <?php if (!empty($order_data['payment_proof'])): ?>
+            <section class="mb-8 border-t pt-6">
+                <h3 class="text-lg font-semibold text-indigo-700 mb-3">Bukti Pembayaran</h3>
+                <div class="flex justify-center">
+                    <img src="<?= BASE_URL ?>/assets/images/proof/<?= htmlspecialchars($order_data['payment_proof']) ?>" 
+                         alt="Bukti Pembayaran" class="max-w-md rounded-lg shadow-md border border-gray-200">
+                </div>
+            </section>
+            <?php endif; ?>
+
+            <!-- Aksi Cetak -->
+            <div class="mt-8 text-center space-x-4 no-print border-t pt-6">
+                <button onclick="window.print()" class="px-6 py-3 bg-indigo-600 text-white font-semibold rounded-lg shadow-lg hover:bg-indigo-700 transition">
+                    <i class="fas fa-print mr-2"></i> Cetak Invoice
+                </button>
+                <a href="<?= BASE_URL ?>/profile/profile.php" class="inline-block px-6 py-3 text-gray-600 border border-gray-300 rounded-lg hover:bg-gray-50 transition">
+                    <i class="fas fa-arrow-left mr-2"></i> Kembali ke Riwayat
+                </a>
             </div>
         </div>
+    </div>
+    
+    <div class="no-print">
+        <?php footer($conn); ?>
     </div>
 </body>
 </html>

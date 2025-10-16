@@ -1,127 +1,222 @@
 <?php
-// File: checkout/checkout.php
-include '../config/config.php';
-include '../sistem/sistem.php';
+// File: checkout/checkout.php - Logika Pemrosesan Checkout
 
-$is_logged_in = isset($_SESSION['user_id']);
-$user_id = $is_logged_in ? $_SESSION['user_id'] : null;
+require_once '../config/config.php';
+require_once '../sistem/sistem.php';
+require_once '../partial/partial.php';
 
-// --- Logika redirect yang lebih baik ---
-if (!$is_logged_in) {
-    $_SESSION['redirect_to'] = BASE_URL . '/checkout/checkout.php';
-    set_flash_message('info', 'Anda harus login terlebih dahulu untuk melanjutkan ke pembayaran.');
-    redirect('/login/login.php');
-    exit;
-}
+check_login();
 
-// Ambil item keranjang dari database
-$cart_items = [];
-$total_price = 0;
-$stmt = $conn->prepare("SELECT p.id, p.name, p.price, p.image, p.stock, c.quantity FROM cart c JOIN products p ON c.product_id = p.id WHERE c.user_id = ?");
-$stmt->bind_param("i", $user_id);
-$stmt->execute();
-$result = $stmt->get_result();
-while ($row = $result->fetch_assoc()) {
-    $cart_items[] = $row;
-    $total_price += $row['price'] * $row['quantity'];
-}
-$stmt->close();
+$user_id = $_SESSION['user_id'];
 
-// Jika keranjang kosong, kembalikan ke keranjang.
-if (empty($cart_items)) {
-    set_flash_message('info', 'Keranjang Anda kosong. Silakan tambahkan produk terlebih dahulu.');
-    redirect('/cart/cart.php');
-    exit;
-}
-
-// Ambil metode pembayaran yang aktif
-$payment_methods = $conn->query("SELECT * FROM payment_methods WHERE is_active = 1");
-
-// --- LOGIKA UTAMA: PROSES PESANAN ---
-if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['place_order'])) {
-    
-    $full_name = sanitize_input($_POST['full_name']);
-    $phone_number = sanitize_input($_POST['phone_number']);
-    $province = sanitize_input($_POST['province']);
-    $city = sanitize_input($_POST['city']);
-    $subdistrict = sanitize_input($_POST['subdistrict']);
-    $postal_code = sanitize_input($_POST['postal_code']);
-    $address_line_1 = sanitize_input($_POST['address_line_1']);
+// --- LOGIKA PEMROSESAN CHECKOUT ---
+if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+    // 1. VALIDASI DAN SANITASI DATA
+    $payment_method_id = (int)($_POST['payment_method'] ?? 0);
+    $full_name = sanitize_input($_POST['full_name'] ?? '');
+    $phone_number = sanitize_input($_POST['phone_number'] ?? '');
+    $province = sanitize_input($_POST['province'] ?? '');
+    $city = sanitize_input($_POST['city'] ?? '');
+    $subdistrict = sanitize_input($_POST['subdistrict'] ?? '');
+    $postal_code = sanitize_input($_POST['postal_code'] ?? '');
+    $address_line_1 = sanitize_input($_POST['address_line_1'] ?? '');
     $address_line_2 = sanitize_input($_POST['address_line_2'] ?? '');
-    $payment_method_id = (int)sanitize_input($_POST['payment_method_id']);
+    $is_default = isset($_POST['is_default']) ? 1 : 0;
 
-    if (!isset($_FILES['payment_proof']) || $_FILES['payment_proof']['error'] != 0) {
-        set_flash_message('error', 'Gagal memproses pesanan: Bukti pembayaran wajib diunggah.');
-        redirect('/checkout/checkout.php');
-    }
-    
-    $upload_dir = '../assets/images/proof/';
-    if (!is_dir($upload_dir)) mkdir($upload_dir, 0777, true);
-    
-    $image_name = uniqid() . '-' . basename($_FILES["payment_proof"]["name"]);
-    $target_file = $upload_dir . $image_name;
-    
-    if (!move_uploaded_file($_FILES["payment_proof"]["tmp_name"], $target_file)) {
-        set_flash_message('error', 'Gagal mengunggah bukti pembayaran.');
-        redirect('/checkout/checkout.php');
+    // Cek apakah data yang dibutuhkan sudah lengkap
+    if (empty($payment_method_id) || empty($full_name) || empty($phone_number) || 
+        empty($province) || empty($city) || empty($address_line_1)) {
+        set_flashdata('error', 'Semua kolom alamat wajib diisi (kecuali Detail Tambahan).');
+        header("Location: " . BASE_URL . "/checkout/checkout.php");
+        exit;
     }
 
-    $conn->begin_transaction();
+    // 2. LOGIKA PENYIMPANAN/PEMBARUAN ALAMAT PENGGUNA
     try {
-        $order_hash = md5(uniqid(rand(), true));
-        $status = 'waiting_approval';
+        $conn->begin_transaction();
 
-        $stmt_order = $conn->prepare("INSERT INTO orders 
-            (user_id, total, payment_proof, status, full_name, phone_number, province, city, subdistrict, postal_code, address_line_1, address_line_2, payment_method_id, order_hash) 
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
+        $address_id = null;
+        // Cek apakah alamat sudah ada
+        $stmt_check = $conn->prepare("
+            SELECT id FROM user_addresses 
+            WHERE user_id = ? AND full_name = ? AND phone_number = ? 
+            AND province = ? AND city = ? AND subdistrict = ? 
+            AND postal_code = ? AND address_line_1 = ? AND address_line_2 = ?
+        ");
+        $stmt_check->bind_param("issssssss", $user_id, $full_name, $phone_number, 
+            $province, $city, $subdistrict, $postal_code, $address_line_1, $address_line_2);
+        $stmt_check->execute();
+        $result_check = $stmt_check->get_result();
         
-        $stmt_order->bind_param("idssssssssssis", 
-            $user_id, $total_price, $image_name, $status, $full_name, $phone_number, $province, $city, $subdistrict, $postal_code, $address_line_1, $address_line_2, $payment_method_id, $order_hash
+        if ($result_check->num_rows > 0) {
+            $existing_address = $result_check->fetch_assoc();
+            $address_id = $existing_address['id'];
+        } else {
+            // Insert alamat baru
+            $stmt_insert = $conn->prepare("
+                INSERT INTO user_addresses 
+                (user_id, full_name, phone_number, province, city, subdistrict, 
+                postal_code, address_line_1, address_line_2) 
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ");
+            $stmt_insert->bind_param("issssssss", $user_id, $full_name, $phone_number, 
+                $province, $city, $subdistrict, $postal_code, $address_line_1, 
+                $address_line_2);
+            $stmt_insert->execute();
+            $address_id = $conn->insert_id;
+            $stmt_insert->close();
+        }
+        $stmt_check->close();
+        
+        // Handle is_default
+        if ($is_default == 1) {
+            $stmt_default_off = $conn->prepare("UPDATE user_addresses SET is_default = 0 WHERE user_id = ? AND id != ?");
+            $stmt_default_off->bind_param("ii", $user_id, $address_id);
+            $stmt_default_off->execute();
+            $stmt_default_off->close();
+
+            $stmt_default_on = $conn->prepare("UPDATE user_addresses SET is_default = 1 WHERE id = ?");
+            $stmt_default_on->bind_param("i", $address_id);
+            $stmt_default_on->execute();
+            $stmt_default_on->close();
+        }
+
+
+        // 3. AMBIL ITEM KERANJANG DAN HITUNG TOTAL
+        $cart_items = get_cart_items($conn, $user_id);
+
+        if (empty($cart_items)) {
+            set_flashdata('error', 'Keranjang Anda kosong. Tidak dapat memproses checkout.');
+            $conn->rollback();
+            header("Location: " . BASE_URL . "/cart/cart.php");
+            exit;
+        }
+
+        $total = 0;
+        foreach ($cart_items as $item) {
+            // ✅ PERBAIKAN: Hitung subtotal secara manual di sini
+            $total += $item['price'] * $item['quantity'];
+        }
+
+        // 4. GENERATE ORDER NUMBER DAN HASH
+        $order_number = generate_order_number($conn);
+        $order_hash = generate_order_hash();
+
+        // 5. INSERT KE TABEL ORDERS
+        $status = 'waiting_payment';
+        $stmt_order = $conn->prepare("
+            INSERT INTO orders 
+            (order_hash, user_id, order_number, user_address_id, total, 
+            payment_method_id, status, full_name, phone_number, province, 
+            city, subdistrict, postal_code, address_line_1, address_line_2) 
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ");
+        $stmt_order->bind_param("sisidisssssssss", 
+            $order_hash, $user_id, $order_number, $address_id, $total, $payment_method_id, 
+            $status, $full_name, $phone_number, $province, $city, $subdistrict, 
+            $postal_code, $address_line_1, $address_line_2
         );
-
-        if (!$stmt_order->execute()) throw new Exception("Gagal menyimpan data pesanan: " . $stmt_order->error);
-        
+        $stmt_order->execute();
         $order_id = $conn->insert_id;
         $stmt_order->close();
-
-        $stmt_item = $conn->prepare("INSERT INTO order_items (order_id, product_id, quantity, price) VALUES (?, ?, ?, ?)");
-        $stmt_stock = $conn->prepare("UPDATE products SET stock = stock - ? WHERE id = ?");
+        
+        // 6. INSERT ORDER ITEMS DAN UPDATE STOK
+        $stmt_item = $conn->prepare("
+            INSERT INTO order_items (order_id, product_id, quantity, price) 
+            VALUES (?, ?, ?, ?)
+        ");
+        $stmt_stock = $conn->prepare("
+            UPDATE products 
+            SET stock = stock - ? 
+            WHERE id = ? AND stock >= ?
+        ");
+        
+        // ✅ FITUR BARU: Menyiapkan query untuk mencatat pembelian user
+        $stmt_purchase_record = $conn->prepare("
+            INSERT INTO user_purchase_records (user_id, product_id, quantity_bought)
+            VALUES (?, ?, ?)
+            ON DUPLICATE KEY UPDATE quantity_bought = quantity_bought + VALUES(quantity_bought)
+        ");
 
         foreach ($cart_items as $item) {
-            $stmt_item->bind_param("iiid", $order_id, $item['id'], $item['quantity'], $item['price']);
-            if (!$stmt_item->execute()) throw new Exception("Gagal menyimpan item pesanan: " . $stmt_item->error);
+            // Insert item
+            $stmt_item->bind_param("iiid", $order_id, $item['product_id'], 
+                $item['quantity'], $item['price']);
+            $stmt_item->execute();
+            
+            // Update stok
+            $stmt_stock->bind_param("iii", $item['quantity'], 
+                $item['product_id'], $item['quantity']);
+            $stmt_stock->execute();
+            
+            // Cek apakah stok cukup
+            if ($stmt_stock->affected_rows === 0) {
+                $conn->rollback();
+                set_flashdata('error', 'Stok produk "' . htmlspecialchars($item['name']) . '" tidak mencukupi.');
+                header("Location: " . BASE_URL . "/cart/cart.php");
+                exit;
+            }
 
-            $stmt_stock->bind_param("ii", $item['quantity'], $item['id']);
-            if (!$stmt_stock->execute()) throw new Exception("Gagal mengupdate stok produk: " . $stmt_stock->error);
+            // ✅ FITUR BARU: Jalankan query untuk mencatat pembelian
+            $stmt_purchase_record->bind_param("iii", $user_id, $item['product_id'], $item['quantity']);
+            $stmt_purchase_record->execute();
         }
         $stmt_item->close();
         $stmt_stock->close();
+        $stmt_purchase_record->close(); // Tutup statement
 
-        $stmt_clear_cart = $conn->prepare("DELETE FROM cart WHERE user_id = ?");
-        $stmt_clear_cart->bind_param("i", $user_id);
-        if (!$stmt_clear_cart->execute()) throw new Exception("Gagal mengosongkan keranjang: " . $stmt_clear_cart->error);
-        $stmt_clear_cart->close();
-        
-        $message = "Pesanan baru #WK{$order_id} telah dibuat dan sedang menunggu konfirmasi pembayaran dari admin.";
-        $stmt_notif = $conn->prepare("INSERT INTO notifications (user_id, message) VALUES (?, ?)");
-        $stmt_notif->bind_param("is", $user_id, $message);
-        $stmt_notif->execute();
-        $stmt_notif->close();
+        // 7. KOSONGKAN KERANJANG
+        $stmt_clear = $conn->prepare("DELETE FROM cart WHERE user_id = ?");
+        $stmt_clear->bind_param("i", $user_id);
+        $stmt_clear->execute();
+        $stmt_clear->close();
 
         $conn->commit();
-        
-        set_flash_message('success', 'Pesanan Anda berhasil dibuat! Admin akan segera memverifikasi pembayaran Anda.');
-        redirect('/profile/profile.php');
+
+        set_flashdata('success', 'Pesanan berhasil dibuat. Silakan unggah bukti pembayaran.');
+        header("Location: " . BASE_URL . "/checkout/upload.php?hash=" . $order_hash);
+        exit;
 
     } catch (Exception $e) {
         $conn->rollback();
-        if (file_exists($target_file)) unlink($target_file);
-        set_flash_message('error', "Terjadi kesalahan saat membuat pesanan: " . $e->getMessage());
         error_log("Checkout Error: " . $e->getMessage());
-        redirect('/checkout/checkout.php');
+        set_flashdata('error', 'Terjadi kesalahan: ' . htmlspecialchars($e->getMessage()));
+        header("Location: " . BASE_URL . "/checkout/checkout.php");
+        exit;
     }
-    exit;
 }
+
+// --- PEMUATAN DATA UNTUK TAMPILAN ---
+$cart_items = get_cart_items($conn, $user_id);
+$subtotal = 0;
+// ✅ PERBAIKAN: Hitung subtotal manual untuk tampilan juga
+foreach ($cart_items as &$item) {
+    $item['subtotal'] = $item['price'] * $item['quantity'];
+    $subtotal += $item['subtotal'];
+}
+unset($item);
+
+$payment_methods = get_payment_methods($conn);
+$default_address = get_default_user_address($conn, $user_id);
+
+if (!$default_address) {
+    $default_address = get_first_user_address($conn, $user_id);
+}
+
+$address_data = [
+    'full_name' => $default_address['full_name'] ?? '',
+    'phone_number' => $default_address['phone_number'] ?? '',
+    'province' => $default_address['province'] ?? '',
+    'city' => $default_address['city'] ?? '',
+    'subdistrict' => $default_address['subdistrict'] ?? '',
+    'postal_code' => $default_address['postal_code'] ?? '',
+    'address_line_1' => $default_address['address_line_1'] ?? '',
+    'address_line_2' => $default_address['address_line_2'] ?? '',
+    'is_default' => $default_address['is_default'] ?? 0,
+];
+
+$flash_message = get_flashdata('error') ?? get_flashdata('success');
+$flash_type = isset($_SESSION['flashdata']['type']) ? $_SESSION['flashdata']['type'] : '';
 ?>
 <!DOCTYPE html>
 <html lang="id">
@@ -130,99 +225,163 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['place_order'])) {
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Checkout - Warok Kite</title>
     <script src="https://cdn.tailwindcss.com"></script>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
-    <style>body { font-family: 'Inter', sans-serif; }</style>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css">
 </head>
 <body class="bg-gray-50">
+    <?php navbar($conn); ?>
 
-    <?php include '../partial/partial.php'; ?>
-    <?= navbar($conn) ?>
-    
-    <main class="container mx-auto px-4 py-8">
-        <h1 class="text-3xl font-bold text-gray-800 mb-6">Checkout</h1>
-        
-        <?= flash_message('error') ?>
-        <?= flash_message('info') ?>
+    <div class="container mx-auto p-4 md:p-8">
+        <h1 class="text-3xl font-bold text-indigo-800 mb-6">Konfirmasi Pesanan Anda</h1>
 
-        <form action="<?= BASE_URL ?>/checkout/checkout.php" method="POST" enctype="multipart/form-data">
-             <div class="grid grid-cols-1 lg:grid-cols-3 gap-8">
-                <div class="lg:col-span-2 bg-white p-6 rounded-lg shadow-md">
-                    <h2 class="text-xl font-bold mb-4 border-b pb-3">1. Alamat Pengiriman</h2>
-                    <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mt-4">
-                        <div>
-                            <label for="full_name" class="block text-sm font-medium text-gray-700">Nama Lengkap</label>
-                            <input type="text" id="full_name" name="full_name" class="mt-1 block w-full border-gray-300 rounded-md shadow-sm" required>
-                        </div>
-                        <div>
-                            <label for="phone_number" class="block text-sm font-medium text-gray-700">Nomor Telepon</label>
-                            <input type="tel" id="phone_number" name="phone_number" class="mt-1 block w-full border-gray-300 rounded-md shadow-sm" required>
-                        </div>
-                        <div>
-                            <label for="province" class="block text-sm font-medium text-gray-700">Provinsi</label>
-                            <input type="text" id="province" name="province" class="mt-1 block w-full border-gray-300 rounded-md shadow-sm" required>
-                        </div>
-                        <div>
-                            <label for="city" class="block text-sm font-medium text-gray-700">Kota/Kabupaten</label>
-                            <input type="text" id="city" name="city" class="mt-1 block w-full border-gray-300 rounded-md shadow-sm" required>
-                        </div>
-                        <div>
-                            <label for="subdistrict" class="block text-sm font-medium text-gray-700">Kecamatan</label>
-                            <input type="text" id="subdistrict" name="subdistrict" class="mt-1 block w-full border-gray-300 rounded-md shadow-sm" required>
-                        </div>
-                        <div>
-                            <label for="postal_code" class="block text-sm font-medium text-gray-700">Kode Pos</label>
-                            <input type="text" id="postal_code" name="postal_code" class="mt-1 block w-full border-gray-300 rounded-md shadow-sm" required>
-                        </div>
-                        <div class="md:col-span-2">
-                            <label for="address_line_1" class="block text-sm font-medium text-gray-700">Alamat Lengkap</label>
-                            <textarea id="address_line_1" name="address_line_1" rows="3" class="mt-1 block w-full border-gray-300 rounded-md shadow-sm" placeholder="Contoh: Jl. Pahlawan No. 123, RT 01/RW 02" required></textarea>
-                        </div>
-                        <div class="md:col-span-2">
-                            <label for="address_line_2" class="block text-sm font-medium text-gray-700">Detail Alamat (Opsional)</label>
-                            <input type="text" id="address_line_2" name="address_line_2" class="mt-1 block w-full border-gray-300 rounded-md shadow-sm" placeholder="Contoh: Sebelah masjid, rumah warna hijau">
-                        </div>
-                    </div>
+        <?php flash_message(); ?>
 
-                    <h2 class="text-xl font-bold mt-8 mb-4 border-b pb-3">2. Metode Pembayaran</h2>
-                    <div class="space-y-3 mt-4">
-                        <?php while($method = $payment_methods->fetch_assoc()): ?>
-                        <label class="flex items-start p-4 border rounded-lg cursor-pointer">
-                            <input type="radio" name="payment_method_id" value="<?= $method['id'] ?>" class="mt-1" required>
-                            <div class="ml-4">
-                                <p class="font-semibold"><?= htmlspecialchars($method['name']) ?></p>
-                                <p class="text-sm text-gray-600"><?= nl2br(htmlspecialchars($method['details'])) ?></p>
-                            </div>
-                        </label>
-                        <?php endwhile; ?>
-                    </div>
-                    <div class="mt-6">
-                        <label for="payment_proof" class="block text-sm font-medium text-gray-700">Upload Bukti Transfer</label>
-                        <input type="file" id="payment_proof" name="payment_proof" class="mt-1 block w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-indigo-50 file:text-indigo-700 hover:file:bg-indigo-100" required>
-                        <p class="text-xs text-gray-500 mt-1">Format: JPG, PNG. Maks: 2MB.</p>
-                    </div>
-                </div>
-
-                <div class="bg-white p-6 rounded-lg shadow-md h-fit">
-                    <h2 class="text-xl font-bold border-b pb-4 mb-4">Ringkasan Pesanan</h2>
-                    <?php foreach($cart_items as $item): ?>
-                    <div class="flex justify-between items-center text-sm mb-2">
-                        <span class="truncate pr-2"><?= htmlspecialchars($item['name']) ?> (x<?= $item['quantity'] ?>)</span>
-                        <span class="font-medium flex-shrink-0"><?= format_rupiah($item['price'] * $item['quantity']) ?></span>
-                    </div>
-                    <?php endforeach; ?>
-                    
-                    <div class="flex justify-between font-bold text-lg border-t pt-4 mt-4">
-                        <span>Total</span>
-                        <span><?= format_rupiah($total_price) ?></span>
-                    </div>
-                    <button type="submit" name="place_order" class="mt-6 block w-full text-center px-6 py-3 bg-indigo-600 text-white font-semibold rounded-lg hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500">
-                        Konfirmasi dan Buat Pesanan
-                    </button>
-                </div>
+        <?php if (empty($cart_items)): ?>
+            <div class="bg-white p-8 rounded-lg shadow text-center">
+                <p class="text-gray-500 text-lg">Keranjang Anda kosong. Tidak ada yang bisa di-checkout.</p>
+                <a href="<?= BASE_URL ?>/index.php" class="mt-4 inline-block px-6 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700">
+                    Mulai Belanja
+                </a>
             </div>
-        </form>
-    </main>
+        <?php else: ?>
+            <form method="POST" class="grid grid-cols-1 lg:grid-cols-3 gap-8">
+                <!-- Kolom Kiri: Alamat & Pembayaran -->
+                <div class="lg:col-span-2 space-y-6">
+                    <!-- Alamat Pengiriman -->
+                    <div class="bg-white p-6 rounded-lg shadow">
+                        <h2 class="text-xl font-semibold text-indigo-700 mb-4 flex items-center">
+                            <i class="fas fa-shipping-fast mr-2"></i> Alamat Pengiriman
+                        </h2>
+                        
+                        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                            <div>
+                                <label class="block text-sm font-medium text-gray-700 mb-1">Nama Penerima *</label>
+                                <input type="text" name="full_name" required value="<?= htmlspecialchars($address_data['full_name']) ?>"
+                                    class="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500">
+                            </div>
+                            <div>
+                                <label class="block text-sm font-medium text-gray-700 mb-1">Nomor Telepon *</label>
+                                <input type="text" name="phone_number" required value="<?= htmlspecialchars($address_data['phone_number']) ?>"
+                                    class="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500">
+                            </div>
+                        </div>
+                        
+                        <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mt-4">
+                            <div>
+                                <label class="block text-sm font-medium text-gray-700 mb-1">Provinsi *</label>
+                                <input type="text" name="province" required value="<?= htmlspecialchars($address_data['province']) ?>"
+                                    class="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500">
+                            </div>
+                            <div>
+                                <label class="block text-sm font-medium text-gray-700 mb-1">Kota / Kabupaten *</label>
+                                <input type="text" name="city" required value="<?= htmlspecialchars($address_data['city']) ?>"
+                                    class="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500">
+                            </div>
+                            <div>
+                                <label class="block text-sm font-medium text-gray-700 mb-1">Kecamatan *</label>
+                                <input type="text" name="subdistrict" required value="<?= htmlspecialchars($address_data['subdistrict']) ?>"
+                                    class="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500">
+                            </div>
+                        </div>
 
-    <?= footer() ?>
+                        <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mt-4">
+                            <div>
+                                <label class="block text-sm font-medium text-gray-700 mb-1">Kode Pos *</label>
+                                <input type="text" name="postal_code" required value="<?= htmlspecialchars($address_data['postal_code']) ?>"
+                                    class="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500">
+                            </div>
+                            <div class="flex items-end">
+                                <label class="flex items-center">
+                                    <input type="checkbox" name="is_default" value="1" <?= $address_data['is_default'] ? 'checked' : '' ?>
+                                        class="h-4 w-4 text-indigo-600 border-gray-300 rounded focus:ring-indigo-500">
+                                    <span class="ml-2 text-sm text-gray-700">Jadikan Alamat Utama</span>
+                                </label>
+                            </div>
+                        </div>
+
+                        <div class="mt-4">
+                            <label class="block text-sm font-medium text-gray-700 mb-1">Alamat Lengkap *</label>
+                            <textarea name="address_line_1" rows="2" required
+                                class="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"><?= htmlspecialchars($address_data['address_line_1']) ?></textarea>
+                        </div>
+                        <div class="mt-4">
+                            <label class="block text-sm font-medium text-gray-700 mb-1">Detail Tambahan (Opsional)</label>
+                            <input type="text" name="address_line_2" value="<?= htmlspecialchars($address_data['address_line_2']) ?>"
+                                class="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500">
+                        </div>
+                    </div>
+
+                    <!-- Metode Pembayaran -->
+                    <div class="bg-white p-6 rounded-lg shadow">
+                        <h2 class="text-xl font-semibold text-indigo-700 mb-4 flex items-center">
+                            <i class="fas fa-credit-card mr-2"></i> Metode Pembayaran
+                        </h2>
+                        <div class="space-y-3">
+                            <?php foreach ($payment_methods as $method): ?>
+                                <label class="flex items-start p-4 border border-gray-200 rounded-lg hover:bg-indigo-50 cursor-pointer transition">
+                                    <input type="radio" name="payment_method" value="<?= $method['id'] ?>" required
+                                        class="mt-1 h-4 w-4 text-indigo-600 border-gray-300 focus:ring-indigo-500">
+                                    <div class="ml-3 flex-1">
+                                        <?php if (!empty($method['logo'])): ?>
+                                            <img src="<?= BASE_URL ?>/assets/images/payment/<?= htmlspecialchars($method['logo']) ?>" 
+                                                alt="<?= htmlspecialchars($method['name']) ?>" class="h-8 mb-2">
+                                        <?php endif; ?>
+                                        <span class="block font-bold text-gray-900"><?= htmlspecialchars($method['name']) ?></span>
+                                        <span class="block text-sm text-gray-600 mt-1"><?= nl2br(htmlspecialchars($method['details'])) ?></span>
+                                    </div>
+                                </label>
+                            <?php endforeach; ?>
+                            <?php if (empty($payment_methods)): ?>
+                                <p class="text-red-500">Tidak ada metode pembayaran tersedia. Hubungi Admin.</p>
+                            <?php endif; ?>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Kolom Kanan: Rincian Pesanan -->
+                <div class="lg:col-span-1">
+                    <div class="bg-white p-6 rounded-lg shadow sticky top-4">
+                        <h2 class="text-xl font-semibold text-indigo-700 mb-4 flex items-center">
+                            <i class="fas fa-shopping-bag mr-2"></i> Rincian Pesanan
+                        </h2>
+                        
+                        <div class="space-y-3 max-h-96 overflow-y-auto mb-4">
+                            <?php foreach ($cart_items as $item): ?>
+                                <div class="flex items-center space-x-3 pb-3 border-b">
+                                    <img src="<?= BASE_URL ?>/assets/images/produk/<?= htmlspecialchars($item['image']) ?>" 
+                                        alt="<?= htmlspecialchars($item['name']) ?>" class="w-12 h-12 object-cover rounded">
+                                    <div class="flex-1">
+                                        <p class="text-sm font-medium text-gray-900"><?= htmlspecialchars($item['name']) ?></p>
+                                        <p class="text-xs text-gray-500">Qty: <?= $item['quantity'] ?></p>
+                                    </div>
+                                    <span class="text-sm font-semibold"><?= format_rupiah($item['subtotal']) ?></span>
+                                </div>
+                            <?php endforeach; ?>
+                        </div>
+
+                        <div class="space-y-2 pt-4 border-t">
+                            <div class="flex justify-between text-gray-700">
+                                <span>Subtotal Produk</span>
+                                <span><?= format_rupiah($subtotal) ?></span>
+                            </div>
+                            <div class="flex justify-between text-gray-700">
+                                <span>Biaya Pengiriman</span>
+                                <span>Gratis</span>
+                            </div>
+                            <div class="flex justify-between text-xl font-bold text-indigo-800 pt-2 border-t">
+                                <span>TOTAL</span>
+                                <span><?= format_rupiah($subtotal) ?></span>
+                            </div>
+                        </div>
+
+                        <button type="submit" class="mt-6 w-full px-4 py-3 bg-indigo-600 text-white font-bold rounded-lg hover:bg-indigo-700 transition">
+                            Konfirmasi dan Bayar
+                        </button>
+                    </div>
+                </div>
+            </form>
+        <?php endif; ?>
+    </div>
+    
+    <?php footer($conn); ?>
 </body>
 </html>

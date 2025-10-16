@@ -1,134 +1,117 @@
 <?php
 // File: login/login.php
-include '../config/config.php';
-include '../sistem/sistem.php';
 
-// Jika sudah login, redirect ke homepage
+require_once '../config/config.php';
+require_once '../sistem/sistem.php';
+require_once '../partial/partial.php';
+
+// Jika pengguna sudah login, arahkan ke halaman yang sesuai
 if (isset($_SESSION['user_id'])) {
-    redirect('/');
-    exit;
+    if (isset($_SESSION['user_role']) && $_SESSION['user_role'] === 'admin') {
+        redirect('/admin/admin.php');
+    }
+    redirect('/profile/profile.php');
 }
 
-$error_message = '';
-
-if ($_SERVER["REQUEST_METHOD"] == "POST") {
+$error = '';
+if ($_SERVER['REQUEST_METHOD'] == 'POST') {
     $email = sanitize_input($_POST['email']);
-    $password = sanitize_input($_POST['password']);
+    $password = $_POST['password'];
 
     if (empty($email) || empty($password)) {
-        $error_message = 'Email dan password tidak boleh kosong.';
+        $error = 'Email dan password tidak boleh kosong.';
     } else {
-        $stmt = $conn->prepare("SELECT id, name, email, password, role FROM users WHERE email = ?");
+        $stmt = $conn->prepare("SELECT id, name, password, role FROM users WHERE email = ?");
         $stmt->bind_param("s", $email);
         $stmt->execute();
         $result = $stmt->get_result();
 
-        if ($result->num_rows == 1) {
+        if ($result->num_rows === 1) {
             $user = $result->fetch_assoc();
+
             if (password_verify($password, $user['password'])) {
-                session_regenerate_id(true);
+                // Login berhasil
                 $_SESSION['user_id'] = $user['id'];
-                $_SESSION['name'] = $user['name'];
-                $_SESSION['role'] = $user['role'];
+                $_SESSION['user_name'] = $user['name'];
+                $_SESSION['user_role'] = $user['role'];
 
-                // --- Logika penggabungan keranjang (Cart Merging) ---
-                if (!empty($_SESSION['cart'])) {
-                    $user_id = $user['id'];
-                    foreach ($_SESSION['cart'] as $product_id => $quantity) {
-                        $stock_res = $conn->query("SELECT stock FROM products WHERE id = $product_id");
-                        $stock = ($stock_res->num_rows > 0) ? $stock_res->fetch_assoc()['stock'] : 0;
+                merge_session_cart_to_db($conn, $user['id']);
 
-                        if ($stock > 0) {
-                            $stmt_check = $conn->prepare("SELECT quantity FROM cart WHERE user_id = ? AND product_id = ?");
-                            $stmt_check->bind_param("ii", $user_id, $product_id);
-                            $stmt_check->execute();
-                            $res_check = $stmt_check->get_result();
-
-                            if ($res_check->num_rows > 0) {
-                                $existing = $res_check->fetch_assoc();
-                                $new_quantity = $existing['quantity'] + $quantity;
-                                $new_quantity = ($new_quantity > $stock) ? $stock : $new_quantity;
-                                $stmt_update = $conn->prepare("UPDATE cart SET quantity = ? WHERE user_id = ? AND product_id = ?");
-                                $stmt_update->bind_param("iii", $new_quantity, $user_id, $product_id);
-                                $stmt_update->execute();
-                            } else {
-                                $new_quantity = ($quantity > $stock) ? $stock : $quantity;
-                                $stmt_insert = $conn->prepare("INSERT INTO cart (user_id, product_id, quantity) VALUES (?, ?, ?)");
-                                
-                                // --- PERBAIKAN UTAMA: Urutan variabel disesuaikan dengan query SQL ---
-                                // Query:    user_id, product_id, quantity
-                                // SEBELUM:  $user_id, $new_quantity, $product_id (SALAH)
-                                // SESUDAH:  $user_id, $product_id, $new_quantity (BENAR)
-                                $stmt_insert->bind_param("iii", $user_id, $product_id, $new_quantity);
-                                
-                                $stmt_insert->execute(); // Ini adalah baris 58 yang menyebabkan error
-                            }
-                        }
-                    }
-                    unset($_SESSION['cart']); // Hapus keranjang guest
+                $redirect_url = $_SESSION['redirect_url'] ?? null;
+                if ($redirect_url && $user['role'] !== 'admin') {
+                    unset($_SESSION['redirect_url']); 
+                    // ✅ PERBAIKAN: Hapus BASE_URL dari sini karena $redirect_url sudah berisi path yang benar
+                    header("Location: " . $redirect_url);
+                    exit;
                 }
 
-                // --- Logika redirect cerdas ---
-                if (isset($_SESSION['redirect_to'])) {
-                    $redirect_url = $_SESSION['redirect_to'];
-                    unset($_SESSION['redirect_to']);
-                    $path_to_redirect = str_replace(BASE_URL, '', $redirect_url);
-                    redirect($path_to_redirect);
-                } elseif ($user['role'] == 'admin') {
+                if ($user['role'] === 'admin') {
                     redirect('/admin/admin.php');
                 } else {
-                    redirect('/');
+                    redirect('/profile/profile.php');
                 }
-                exit;
-
             } else {
-                $error_message = 'Email atau password salah.';
+                $error = 'Email atau password salah.';
             }
         } else {
-            $error_message = 'Email atau password salah.';
+            $error = 'Email atau password salah.';
         }
         $stmt->close();
     }
 }
+$page_title = "Login";
 ?>
-
 <!DOCTYPE html>
 <html lang="id">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Login - Warok Kite</title>
+    <title><?= $page_title ?> - <?= get_setting($conn, 'store_name') ?></title>
     <script src="https://cdn.tailwindcss.com"></script>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
-    <style>body { font-family: 'Inter', sans-serif; }</style>
 </head>
-<body class="bg-gray-50 flex items-center justify-center min-h-screen">
+<body class="bg-gray-100 flex items-center justify-center min-h-screen">
+    <div class="w-full max-w-md">
+        <div class="bg-white shadow-lg rounded-xl p-8">
+            <a href="<?= BASE_URL ?>" class="flex justify-center mb-6">
+                 <img src="<?= BASE_URL ?>/assets/images/settings/<?= get_setting($conn, 'store_logo') ?>" alt="Logo" class="h-12 w-auto object-contain">
+            </a>
+            <h2 class="text-2xl font-bold text-center text-gray-800 mb-2">Selamat Datang Kembali</h2>
+            <p class="text-center text-gray-500 mb-6">Silakan masuk untuk melanjutkan.</p>
+            
+            <?php if ($error): ?>
+                <div class="bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded-lg relative mb-4" role="alert">
+                    <span class="block sm:inline"><?= htmlspecialchars($error) ?></span>
+                </div>
+            <?php endif; ?>
+            
+            <?php 
+            // Memanggil flash_message() untuk menampilkan notifikasi dari sistem.
+            flash_message(); 
+            ?>
 
-    <div class="w-full max-w-md bg-white p-8 rounded-lg shadow-md">
-        <h1 class="text-2xl font-bold text-center text-gray-800 mb-2">Selamat Datang Kembali</h1>
-        <p class="text-center text-gray-600 mb-6">Silakan login untuk melanjutkan.</p>
-
-        <?php if (!empty($error_message)): ?>
-            <div class="bg-red-100 text-red-700 p-3 rounded-md mb-4 text-sm"><?= $error_message ?></div>
-        <?php endif; ?>
-        
-        <?= flash_message('info') ?>
-
-        <form action="" method="POST">
-            <div class="mb-4">
-                <label for="email" class="block text-sm font-medium text-gray-700">Email</label>
-                <input type="email" id="email" name="email" required class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-indigo-500">
-            </div>
-            <div class="mb-6">
-                <label for="password" class="block text-sm font-medium text-gray-700">Password</label>
-                <input type="password" id="password" name="password" required class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-indigo-500">
-            </div>
-            <button type="submit" class="w-full bg-indigo-600 text-white py-2 rounded-md hover:bg-indigo-700">Login</button>
-        </form>
-        <p class="text-center text-sm text-gray-600 mt-4">
-            Belum punya akun? <a href="<?= BASE_URL ?>/register/register.php" class="font-medium text-indigo-600 hover:text-indigo-500">Daftar di sini</a>
-        </p>
+            <form action="login.php" method="POST" class="space-y-4">
+                <div>
+                    <label for="email" class="block text-sm font-medium text-gray-700">Alamat Email</label>
+                    <input type="email" id="email" name="email" required
+                           class="mt-1 block w-full px-3 py-2 bg-white border border-gray-300 rounded-md shadow-sm placeholder-gray-400 focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm">
+                </div>
+                <div>
+                    <label for="password" class="block text-sm font-medium text-gray-700">Password</label>
+                    <input type="password" id="password" name="password" required
+                           class="mt-1 block w-full px-3 py-2 bg-white border border-gray-300 rounded-md shadow-sm placeholder-gray-400 focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm">
+                </div>
+                <button type="submit"
+                        class="w-full flex justify-center py-2 px-4 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500">
+                    Masuk
+                </button>
+            </form>
+            <p class="mt-6 text-center text-sm text-gray-600">
+                Belum punya akun?
+                <a href="<?= BASE_URL ?>/register/register.php" class="font-medium text-indigo-600 hover:text-indigo-500">
+                    Daftar di sini
+                </a>
+            </p>
+        </div>
     </div>
-
 </body>
 </html>

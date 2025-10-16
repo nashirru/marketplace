@@ -1,154 +1,205 @@
 <?php
 // File: admin/pesanan/pesanan.php
-if (!defined('BASE_URL')) die('Akses dilarang');
+if (!defined('IS_ADMIN_PAGE')) {
+    die('Akses dilarang');
+}
 
-// Logika Filter
+// Ambil semua parameter dari URL
 $status_filter = $_GET['status'] ?? 'semua';
-// Tambahkan status baru ke dalam array yang diizinkan
+$search_query = $_GET['search'] ?? '';
+$limit = (int)($_GET['limit'] ?? 10);
+$current_page = (int)($_GET['page'] ?? 1);
+
 $allowed_statuses = ['semua', 'waiting_payment', 'waiting_approval', 'belum_dicetak', 'processed', 'shipped', 'completed', 'cancelled'];
 if (!in_array($status_filter, $allowed_statuses)) {
     $status_filter = 'semua';
 }
 
-// Mapping status baru untuk judul, filter, dan dropdown
 $status_map = [
-    'semua' => 'Semua Pesanan',
-    'waiting_payment' => 'Menunggu Pembayaran',
-    'waiting_approval' => 'Perlu Verifikasi',
-    'belum_dicetak' => 'Belum di Cetak', // Status baru untuk Admin
-    'processed' => 'Diproses',
-    'shipped' => 'Dikirim',
-    'completed' => 'Selesai',
-    'cancelled' => 'Dibatalkan'
+    'semua' => 'Semua Pesanan', 'waiting_payment' => 'Menunggu Pembayaran', 'waiting_approval' => 'Perlu Verifikasi',
+    'belum_dicetak' => 'Belum Dicetak', 'processed' => 'Diproses', 'shipped' => 'Dikirim',
+    'completed' => 'Selesai', 'cancelled' => 'Dibatalkan'
 ];
 
-// Fungsi untuk kelas warna status
-function get_admin_status_class($status) {
-    switch ($status) {
-        case 'completed': return 'bg-green-100 text-green-800';
-        case 'shipped': return 'bg-blue-100 text-blue-800';
-        case 'processed': return 'bg-purple-100 text-purple-800';
-        case 'belum_dicetak': return 'bg-teal-100 text-teal-800'; // Warna baru
-        case 'waiting_approval': return 'bg-yellow-100 text-yellow-800';
-        case 'waiting_payment': return 'bg-orange-100 text-orange-800';
-        case 'cancelled': return 'bg-red-100 text-red-800';
-        default: return 'bg-gray-100 text-gray-800';
-    }
-}
+// Ambil data dari DB menggunakan fungsi baru
+$data = get_orders_with_items_by_status($conn, [
+    'status' => $status_filter, 'search' => $search_query,
+    'limit' => $limit, 'page' => $current_page
+]);
+$orders = $data['orders'];
+$total_records = $data['total'];
+$total_pages = ceil($total_records / $limit);
 
-// Ambil data pesanan
-$orders = [];
-$sql = "SELECT o.*, u.name as user_name FROM orders o JOIN users u ON o.user_id = u.id";
-if ($status_filter !== 'semua') {
-    $sql .= " WHERE o.status = ?";
-    $stmt = $conn->prepare($sql);
-    $stmt->bind_param("s", $status_filter);
-} else {
-    $sql .= " ORDER BY o.created_at DESC";
-    $stmt = $conn->prepare($sql);
+function get_status_class($status) {
+    $classes = [
+        'completed' => 'bg-green-100 text-green-800', 'shipped' => 'bg-blue-100 text-blue-800',
+        'processed' => 'bg-cyan-100 text-cyan-800', 'belum_dicetak' => 'bg-purple-100 text-purple-800',
+        'waiting_approval' => 'bg-yellow-100 text-yellow-800', 'waiting_payment' => 'bg-orange-100 text-orange-800',
+        'cancelled' => 'bg-red-100 text-red-800',
+    ];
+    return $classes[$status] ?? 'bg-gray-100 text-gray-800';
 }
-$stmt->execute();
-$result = $stmt->get_result();
-while ($row = $result->fetch_assoc()) {
-    $orders[] = $row;
-}
-$stmt->close();
 ?>
 
-<!-- Kontrol Atas -->
-<div class="mb-6 flex flex-wrap items-center justify-between gap-4 border-b border-gray-200 pb-4">
-    <!-- Sub Navigasi Filter -->
-    <div class="flex flex-wrap items-center gap-2">
-        <?php foreach ($status_map as $status_key => $status_name): ?>
-            <a href="?page=pesanan&status=<?= $status_key ?>" 
-               class="px-3 py-1.5 text-sm font-medium rounded-md transition-colors 
-                      <?= $status_filter == $status_key ? 'bg-indigo-600 text-white shadow' : 'text-gray-600 hover:bg-gray-200' ?>">
-                <?= $status_name ?>
+<div class="bg-white p-6 rounded-lg shadow-md">
+    <!-- Header Kontrol -->
+    <div class="flex flex-wrap items-center justify-between gap-4 border-b border-gray-200 pb-4 mb-4">
+        <form method="GET" class="flex-grow md:flex-grow-0">
+            <input type="hidden" name="page" value="pesanan">
+            <input type="hidden" name="status" value="<?= htmlspecialchars($status_filter) ?>">
+            <div class="relative">
+                <input type="text" name="search" value="<?= htmlspecialchars($search_query) ?>" placeholder="Cari No. Pesanan, Nama..." class="pl-10 pr-4 py-2 border rounded-lg w-full md:w-80">
+                <i class="fas fa-search absolute left-3 top-1/2 -translate-y-1/2 text-gray-400"></i>
+            </div>
+        </form>
+        <div class="flex items-center gap-4">
+             <?php if ($status_filter === 'belum_dicetak' && !empty($orders)): ?>
+                <a href="<?= BASE_URL ?>/admin/pesanan/cetak_resi.php?status=belum_dicetak" target="_blank" class="px-4 py-2 bg-gray-600 text-white text-sm font-semibold rounded-md hover:bg-gray-700 shadow">
+                    <i class="fas fa-print mr-2"></i>Cetak Semua Resi
+                </a>
+            <?php endif; ?>
+            <select onchange="window.location.href=this.value" class="border rounded-lg text-sm p-2">
+                <?php foreach ([10, 25, 50] as $l): ?>
+                    <option value="?page=pesanan&status=<?= $status_filter ?>&search=<?= $search_query ?>&limit=<?= $l ?>" <?= $limit == $l ? 'selected' : '' ?>><?= $l ?>/halaman</option>
+                <?php endforeach; ?>
+            </select>
+        </div>
+    </div>
+
+    <!-- Navigasi Tab Status -->
+    <div class="flex flex-wrap items-center gap-2 mb-4">
+        <?php foreach ($status_map as $key => $value): ?>
+            <a href="?page=pesanan&status=<?= $key ?>&search=<?= $search_query ?>&limit=<?= $limit ?>" class="px-3 py-1.5 text-sm font-medium rounded-md transition-colors <?= $status_filter == $key ? 'bg-indigo-600 text-white shadow' : 'text-gray-600 hover:bg-gray-200' ?>">
+                <?= $value ?>
             </a>
         <?php endforeach; ?>
     </div>
-    
-    <!-- Tombol Cetak Semua Resi (hanya muncul saat filter 'Belum di Cetak') -->
-    <?php if ($status_filter === 'belum_dicetak' && !empty($orders)): ?>
-    <div>
-        <a href="<?= BASE_URL ?>/admin/pesanan/cetak_resi.php?action=print_all" 
-           target="_blank"
-           class="px-4 py-2 bg-green-600 text-white text-sm font-semibold rounded-md hover:bg-green-700 shadow">
-            Cetak Semua Resi
-        </a>
-    </div>
-    <?php endif; ?>
-</div>
 
+    <form method="POST" action="<?= BASE_URL ?>/admin/admin.php">
+        <input type="hidden" name="active_query_string" value="<?= http_build_query($_GET) ?>">
 
-<?= flash_message('success'); ?>
-<?= flash_message('error'); ?>
-
-<div class="bg-white p-4 rounded-lg shadow-md overflow-x-auto">
-    <table class="min-w-full divide-y divide-gray-200">
-        <thead class="bg-gray-50">
-            <tr>
-                <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Order</th>
-                <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Pelanggan</th>
-                <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Total</th>
-                <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Bukti Bayar</th>
-                <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Status</th>
-                <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Aksi</th>
-            </tr>
-        </thead>
-        <tbody class="bg-white divide-y divide-gray-200">
-        <?php if(!empty($orders)): ?>
-            <?php foreach($orders as $order): ?>
-                <tr>
-                    <td class="px-4 py-4 whitespace-nowrap text-sm">
-                        <a href="<?= BASE_URL ?>/checkout/invoice.php?hash=<?= $order['order_hash'] ?>" target="_blank" class="font-medium text-indigo-600 hover:text-indigo-800">#WK<?= $order['id'] ?></a>
-                    </td>
-                    <td class="px-4 py-4 whitespace-nowrap text-sm text-gray-500"><?= htmlspecialchars($order['user_name']) ?></td>
-                    <td class="px-4 py-4 whitespace-nowrap text-sm text-gray-500"><?= format_rupiah($order['total']) ?></td>
-                    <td class="px-4 py-4 whitespace-nowrap text-sm">
-                        <?php if (!empty($order['payment_proof'])): ?>
-                            <a href="<?= BASE_URL ?>/assets/images/proof/<?= $order['payment_proof'] ?>" target="_blank" class="text-indigo-600 hover:underline">Lihat</a>
-                        <?php else: ?>
-                            <span class="text-gray-400">-</span>
-                        <?php endif; ?>
-                    </td>
-                    <td class="px-4 py-4 whitespace-nowrap text-sm">
-                        <span class="px-2 inline-flex text-xs leading-5 font-semibold rounded-full <?= get_admin_status_class($order['status']) ?>">
-                            <?= htmlspecialchars($status_map[$order['status']]) ?>
-                        </span>
-                    </td>
-                    <td class="px-4 py-4 whitespace-nowrap text-sm">
-                        <div class="flex items-center space-x-2">
-                             <!-- Tombol Cetak Resi Individual -->
-                            <?php if ($order['status'] == 'belum_dicetak'): ?>
-                                <a href="<?= BASE_URL ?>/admin/pesanan/cetak_resi.php?order_id=<?= $order['id'] ?>" target="_blank" class="px-2 py-1 text-xs bg-green-500 text-white rounded-md hover:bg-green-600">Cetak Resi</a>
-                            <?php endif; ?>
-
-                            <form action="<?= BASE_URL ?>/admin/admin.php" method="POST">
-                                <input type="hidden" name="order_id" value="<?= $order['id'] ?>">
-                                <input type="hidden" name="current_page" value="<?= htmlspecialchars($_SERVER['REQUEST_URI']) ?>">
-                                <select name="status" class="text-xs border-gray-300 rounded-md shadow-sm">
-                                    <?php 
-                                    // PERBAIKAN: Tampilkan semua status yang relevan di dropdown, termasuk "Belum di Cetak"
-                                    $dropdown_statuses = $status_map;
-                                    unset($dropdown_statuses['semua']); // Hapus 'semua' karena bukan status valid untuk update
-                                    
-                                    foreach($dropdown_statuses as $key => $value): 
-                                    ?>
-                                    <option value="<?= $key ?>" <?= $order['status'] == $key ? 'selected' : '' ?>><?= $value ?></option>
-                                    <?php endforeach; ?>
-                                </select>
-                                <button type="submit" name="update_status" class="px-2 py-1 text-xs bg-indigo-600 text-white rounded-md hover:bg-indigo-700">Update</button>
-                            </form>
-                        </div>
-                    </td>
-                </tr>
-            <?php endforeach; ?>
-        <?php else: ?>
-            <tr>
-                <td colspan="6" class="text-center py-8 text-gray-500">Tidak ada pesanan dengan status "<?= htmlspecialchars($status_map[$status_filter]) ?>".</td>
-            </tr>
+        <!-- Tombol Aksi Massal -->
+        <?php if (in_array($status_filter, ['waiting_approval', 'processed', 'shipped'])): ?>
+        <div class="mb-4 p-2 bg-gray-50 rounded-lg flex items-center gap-4">
+            <span class="text-sm font-medium text-gray-700">Aksi untuk item terpilih:</span>
+            <?php if($status_filter == 'waiting_approval'): ?>
+                <button type="submit" name="action" value="approve_payment" class="px-3 py-1 text-xs bg-green-500 text-white rounded hover:bg-green-600">Setujui</button>
+                <button type="submit" name="action" value="reject_payment" class="px-3 py-1 text-xs bg-red-500 text-white rounded hover:bg-red-600">Tolak</button>
+            <?php elseif($status_filter == 'processed'): ?>
+                <button type="submit" name="action" value="ship_order" class="px-3 py-1 text-xs bg-blue-500 text-white rounded hover:bg-blue-600">Kirim Pesanan</button>
+            <?php elseif($status_filter == 'shipped'): ?>
+                <button type="submit" name="action" value="complete_order" class="px-3 py-1 text-xs bg-purple-500 text-white rounded hover:bg-purple-600">Selesaikan Pesanan</button>
+            <?php endif; ?>
+        </div>
         <?php endif; ?>
-        </tbody>
-    </table>
+
+        <!-- Tabel Pesanan -->
+        <div class="overflow-x-auto">
+            <table class="min-w-full divide-y divide-gray-200">
+                <thead class="bg-gray-50">
+                    <tr>
+                        <?php if (in_array($status_filter, ['waiting_approval', 'processed', 'shipped'])): ?>
+                        <th class="px-4 py-3"><input type="checkbox" onclick="toggleAll(this)"></th>
+                        <?php endif; ?>
+                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Pesanan</th>
+                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Pelanggan</th>
+                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Total</th>
+                        <th class="px-6 py-3 text-center text-xs font-medium text-gray-500 uppercase">Status</th>
+                        <th class="px-6 py-3 text-center text-xs font-medium text-gray-500 uppercase">Aksi</th>
+                    </tr>
+                </thead>
+                <tbody class="bg-white divide-y divide-gray-200">
+                    <?php if (!empty($orders)): foreach ($orders as $order): ?>
+                        <tr>
+                            <?php if (in_array($status_filter, ['waiting_approval', 'processed', 'shipped'])): ?>
+                            <td class="px-4 py-4"><input type="checkbox" name="selected_orders[]" value="<?= $order['id'] ?>" class="order-checkbox"></td>
+                            <?php endif; ?>
+                            <td class="px-6 py-4"><div class="font-bold text-indigo-600"><?= htmlspecialchars($order['order_number']) ?></div><div class="text-xs text-gray-500"><?= date('d M Y, H:i', strtotime($order['created_at'])) ?></div></td>
+                            <td class="px-6 py-4"><div class="text-sm"><?= htmlspecialchars($order['user_name']) ?></div><div class="text-xs text-gray-500"><?= htmlspecialchars($order['phone_number']) ?></div></td>
+                            <td class="px-6 py-4 font-medium"><?= format_rupiah($order['total']) ?></td>
+                            <td class="px-6 py-4 text-center"><span class="px-2 inline-flex text-xs leading-5 font-semibold rounded-full <?= get_status_class($order['status']) ?>"><?= $status_map[$order['status']] ?></span></td>
+                            <td class="px-6 py-4 text-center">
+                                <div class="flex items-center justify-center gap-2">
+                                    <button type="button" onclick="toggleDetails(<?= $order['id'] ?>)" title="Lihat Detail" class="text-gray-500 hover:text-indigo-600"><i class="fas fa-eye"></i></button>
+                                    <?php switch($order['status']): case 'waiting_approval': ?>
+                                        <button form="form-approve-<?= $order['id'] ?>" type="submit" title="Setujui" class="text-green-500 hover:text-green-700"><i class="fas fa-check-circle"></i></button>
+                                        <button form="form-reject-<?= $order['id'] ?>" type="submit" title="Tolak" class="text-red-500 hover:text-red-700"><i class="fas fa-times-circle"></i></button>
+                                    <?php break; case 'belum_dicetak': ?>
+                                        <a href="<?= BASE_URL ?>/admin/pesanan/cetak_resi.php?order_id=<?= $order['id'] ?>" target="_blank" title="Cetak Resi" class="text-gray-500 hover:text-black"><i class="fas fa-print"></i></a>
+                                        <button form="form-process-<?= $order['id'] ?>" type="submit" title="Proses Pesanan" class="text-cyan-500 hover:text-cyan-700"><i class="fas fa-box"></i></button>
+                                    <?php break; case 'processed': ?>
+                                        <button form="form-ship-<?= $order['id'] ?>" type="submit" title="Kirim Pesanan" class="text-blue-500 hover:text-blue-700"><i class="fas fa-truck"></i></button>
+                                    <?php break; case 'shipped': ?>
+                                        <button form="form-complete-<?= $order['id'] ?>" type="submit" title="Selesaikan Pesanan" class="text-purple-500 hover:text-purple-700"><i class="fas fa-check-double"></i></button>
+                                    <?php break; endswitch; ?>
+                                </div>
+                            </td>
+                        </tr>
+                        <tr id="details-<?= $order['id'] ?>" class="hidden bg-gray-50">
+                            <td colspan="<?= in_array($status_filter, ['waiting_approval', 'processed', 'shipped']) ? 6 : 5 ?>" class="p-4">
+                                <!-- Detail Content -->
+                                <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                    <div>
+                                        <h4 class="font-semibold text-xs mb-2 text-gray-600">ITEM PESANAN:</h4>
+                                        <div class="space-y-2">
+                                            <?php foreach($order['items'] as $item): ?>
+                                                <div class="flex items-center text-xs text-gray-700">
+                                                    <img src="<?= BASE_URL ?>/assets/images/produk/<?= htmlspecialchars($item['product_image']) ?>" class="w-8 h-8 rounded object-cover mr-3 border">
+                                                    <span class="flex-grow"><?= htmlspecialchars($item['product_name']) ?></span>
+                                                    <span class="font-medium">x <?= $item['quantity'] ?></span>
+                                                </div>
+                                            <?php endforeach; ?>
+                                        </div>
+                                    </div>
+                                    <?php if(!empty($order['payment_proof'])): ?>
+                                    <div>
+                                        <h4 class="font-semibold text-xs mb-2 text-gray-600">BUKTI PEMBAYARAN:</h4>
+                                        <a href="<?= BASE_URL ?>/assets/images/proof/<?= $order['payment_proof'] ?>" target="_blank">
+                                            <img src="<?= BASE_URL ?>/assets/images/proof/<?= $order['payment_proof'] ?>" class="h-24 rounded border cursor-pointer">
+                                        </a>
+                                    </div>
+                                    <?php endif; ?>
+                                </div>
+                            </td>
+                        </tr>
+                    <?php endforeach; else: ?>
+                        <tr><td colspan="<?= in_array($status_filter, ['waiting_approval', 'processed', 'shipped']) ? 6 : 5 ?>" class="text-center py-10 text-gray-500">Tidak ada pesanan ditemukan.</td></tr>
+                    <?php endif; ?>
+                </tbody>
+            </table>
+        </div>
+    </form>
+    
+    <!-- Form-form individual untuk setiap aksi -->
+    <?php foreach($orders as $order): ?>
+        <form id="form-approve-<?= $order['id'] ?>" method="POST" action="<?= BASE_URL ?>/admin/admin.php"><input type="hidden" name="order_id" value="<?= $order['id'] ?>"><input type="hidden" name="action" value="approve_payment"><input type="hidden" name="active_query_string" value="<?= http_build_query($_GET) ?>"></form>
+        <form id="form-reject-<?= $order['id'] ?>" method="POST" action="<?= BASE_URL ?>/admin/admin.php"><input type="hidden" name="order_id" value="<?= $order['id'] ?>"><input type="hidden" name="action" value="reject_payment"><input type="hidden" name="active_query_string" value="<?= http_build_query($_GET) ?>"></form>
+        <form id="form-process-<?= $order['id'] ?>" method="POST" action="<?= BASE_URL ?>/admin/admin.php"><input type="hidden" name="order_id" value="<?= $order['id'] ?>"><input type="hidden" name="action" value="process_order"><input type="hidden" name="active_query_string" value="<?= http_build_query($_GET) ?>"></form>
+        <form id="form-ship-<?= $order['id'] ?>" method="POST" action="<?= BASE_URL ?>/admin/admin.php"><input type="hidden" name="order_id" value="<?= $order['id'] ?>"><input type="hidden" name="action" value="ship_order"><input type="hidden" name="active_query_string" value="<?= http_build_query($_GET) ?>"></form>
+        <form id="form-complete-<?= $order['id'] ?>" method="POST" action="<?= BASE_URL ?>/admin/admin.php"><input type="hidden" name="order_id" value="<?= $order['id'] ?>"><input type="hidden" name="action" value="complete_order"><input type="hidden" name="active_query_string" value="<?= http_build_query($_GET) ?>"></form>
+    <?php endforeach; ?>
+
+    <!-- Paginasi -->
+    <div class="flex items-center justify-between border-t border-gray-200 px-4 py-3 mt-4">
+        <p class="text-sm text-gray-700">Menampilkan <?= min(($current_page - 1) * $limit + 1, $total_records) ?> - <?= min($current_page * $limit, $total_records) ?> dari <?= $total_records ?> hasil</p>
+        <nav class="inline-flex rounded-md shadow-sm -space-x-px">
+            <?php for ($i = 1; $i <= $total_pages; $i++): ?>
+                <a href="?page=pesanan&status=<?= $status_filter ?>&search=<?= $search_query ?>&limit=<?= $limit ?>&page=<?= $i ?>" class="<?= $i == $current_page ? 'z-10 bg-indigo-50 border-indigo-500 text-indigo-600' : 'bg-white border-gray-300 text-gray-500 hover:bg-gray-50' ?> relative inline-flex items-center px-4 py-2 border text-sm font-medium">
+                    <?= $i ?>
+                </a>
+            <?php endfor; ?>
+        </nav>
+    </div>
 </div>
+
+<script>
+    function toggleDetails(orderId) {
+        document.getElementById('details-' + orderId).classList.toggle('hidden');
+    }
+    function toggleAll(source) {
+        const checkboxes = document.querySelectorAll('.order-checkbox');
+        for (let i = 0; i < checkboxes.length; i++) {
+            checkboxes[i].checked = source.checked;
+        }
+    }
+</script>
