@@ -53,6 +53,7 @@ if ($action == 'add' || $action == 'edit') {
 
     // Ambil data produk
     $products = [];
+    // Query tidak berubah, mengambil purchase_limit
     $sql = "SELECT p.*, c.name as category_name FROM products p JOIN categories c ON p.category_id = c.id" . $where_clause . " ORDER BY p.created_at DESC LIMIT ? OFFSET ?";
     $stmt_params = $params;
     $stmt_params[] = $limit;
@@ -120,7 +121,7 @@ if ($action == 'add' || $action == 'edit') {
                                 <?= $product['stock'] ?>
                             </td>
                             <td class="px-4 py-4 whitespace-nowrap text-sm text-center text-gray-500">
-                                <?= (!is_null($product['purchase_limit']) && $product['purchase_limit'] > 0) ? $product['purchase_limit'] : '<i class="fas fa-infinity text-gray-400"></i>' ?>
+                                <?= (isset($product['purchase_limit']) && $product['purchase_limit'] > 0) ? $product['purchase_limit'] : '<i class="fas fa-infinity text-gray-400"></i>' ?>
                             </td>
                             <td class="px-4 py-4 whitespace-nowrap text-sm">
                                 <div class="flex items-center space-x-3">

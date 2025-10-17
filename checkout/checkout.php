@@ -92,9 +92,27 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             exit;
         }
 
+        // PENGECEKAN ULANG BATAS PEMBELIAN
+        foreach ($cart_items as $item) {
+            // Menggunakan fungsi get_product_limit dari sistem.php
+            $product_limit = get_product_limit($conn, $item['product_id']);
+            if ($product_limit > 0) {
+                // Menggunakan fungsi get_user_purchase_count dari sistem.php
+                $already_bought = get_user_purchase_count($conn, $user_id, $item['product_id']);
+                
+                if (($already_bought + $item['quantity']) > $product_limit) {
+                    $conn->rollback();
+                    set_flashdata('error', "Anda melebihi batas pembelian ({$product_limit}) untuk produk " . htmlspecialchars($item['name']) . ". Silakan kurangi kuantitas di keranjang.");
+                    header("Location: " . BASE_URL . "/cart/cart.php");
+                    exit;
+                }
+            }
+        }
+        // END PENGECEKAN ULANG
+
         $total = 0;
         foreach ($cart_items as $item) {
-            // ✅ PERBAIKAN: Hitung subtotal secara manual di sini
+            // Hitung subtotal secara manual di sini
             $total += $item['price'] * $item['quantity'];
         }
 
@@ -131,13 +149,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             WHERE id = ? AND stock >= ?
         ");
         
-        // ✅ FITUR BARU: Menyiapkan query untuk mencatat pembelian user
-        $stmt_purchase_record = $conn->prepare("
-            INSERT INTO user_purchase_records (user_id, product_id, quantity_bought)
-            VALUES (?, ?, ?)
-            ON DUPLICATE KEY UPDATE quantity_bought = quantity_bought + VALUES(quantity_bought)
-        ");
-
         foreach ($cart_items as $item) {
             // Insert item
             $stmt_item->bind_param("iiid", $order_id, $item['product_id'], 
@@ -157,13 +168,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 exit;
             }
 
-            // ✅ FITUR BARU: Jalankan query untuk mencatat pembelian
-            $stmt_purchase_record->bind_param("iii", $user_id, $item['product_id'], $item['quantity']);
-            $stmt_purchase_record->execute();
         }
         $stmt_item->close();
         $stmt_stock->close();
-        $stmt_purchase_record->close(); // Tutup statement
 
         // 7. KOSONGKAN KERANJANG
         $stmt_clear = $conn->prepare("DELETE FROM cart WHERE user_id = ?");
@@ -186,10 +193,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     }
 }
 
+// LOGIKA LAMA: get_product_limit di sini Dihapus karena sudah ada di sistem.php
+
 // --- PEMUATAN DATA UNTUK TAMPILAN ---
 $cart_items = get_cart_items($conn, $user_id);
 $subtotal = 0;
-// ✅ PERBAIKAN: Hitung subtotal manual untuk tampilan juga
+// Hitung subtotal manual untuk tampilan juga
 foreach ($cart_items as &$item) {
     $item['subtotal'] = $item['price'] * $item['quantity'];
     $subtotal += $item['subtotal'];
@@ -215,8 +224,9 @@ $address_data = [
     'is_default' => $default_address['is_default'] ?? 0,
 ];
 
-$flash_message = get_flashdata('error') ?? get_flashdata('success');
-$flash_type = isset($_SESSION['flashdata']['type']) ? $_SESSION['flashdata']['type'] : '';
+$flash = get_flashdata();
+$flash_message = $flash['message'] ?? null;
+$flash_type = $flash['type'] ?? '';
 ?>
 <!DOCTYPE html>
 <html lang="id">

@@ -16,6 +16,7 @@ if ($product_id <= 0 || $quantity_to_add <= 0) {
 }
 
 // Ambil data produk (stok dan limit)
+// Note: purchase_limit 0 atau NULL berarti unlimited
 $stmt_prod = $conn->prepare("SELECT stock, purchase_limit, name FROM products WHERE id = ?");
 $stmt_prod->bind_param("i", $product_id);
 $stmt_prod->execute();
@@ -33,15 +34,28 @@ if ($quantity_to_add > $product['stock']) {
     redirect($redirect_url);
 }
 
-// ✅ FITUR BARU: Cek Limit Pembelian
+// Cek Limit Pembelian (menggunakan fungsi yang sudah diperbarui di sistem.php)
 if ($user_id > 0 && !is_null($product['purchase_limit']) && $product['purchase_limit'] > 0) {
+    // get_user_purchase_count kini hanya menghitung pembelian sejak last_stock_reset
     $already_bought = get_user_purchase_count($conn, $user_id, $product_id);
     $quantity_in_cart = get_quantity_in_cart($conn, $user_id, $product_id);
     
-    if (($already_bought + $quantity_in_cart + $quantity_to_add) > $product['purchase_limit']) {
-        $sisa_kuota = $product['purchase_limit'] - ($already_bought + $quantity_in_cart);
-        $sisa_kuota = max(0, $sisa_kuota); // Pastikan tidak negatif
-        set_flashdata('error', "Anda melebihi batas pembelian. Sisa kuota Anda untuk produk ini adalah {$sisa_kuota} buah.");
+    // Perhitungan total yang akan dimiliki jika item ini ditambahkan
+    $total_future_quantity = $already_bought + $quantity_in_cart + $quantity_to_add;
+
+    if ($total_future_quantity > $product['purchase_limit']) {
+        // Hitung kuota yang tersisa untuk ditambahkan ke keranjang
+        $sisa_kuota_add = $product['purchase_limit'] - ($already_bought + $quantity_in_cart);
+        $sisa_kuota_add = max(0, $sisa_kuota_add); // Pastikan tidak negatif
+
+        // Jika kuota add_to_cart adalah 0, berikan pesan error
+        if ($sisa_kuota_add === 0) {
+             set_flashdata('error', "Anda telah mencapai batas pembelian {$product['purchase_limit']} untuk produk ini.");
+        } else {
+             // Jika kuota add_to_cart tidak 0, tapi kuantitas yang diminta > kuota
+             set_flashdata('error', "Anda hanya dapat menambahkan maksimal {$sisa_kuota_add} buah lagi (Batas Pembelian: {$product['purchase_limit']} buah).");
+        }
+        
         redirect($redirect_url);
     }
 }
@@ -63,6 +77,7 @@ if ($user_id > 0) {
         $stmt_insert->close();
     }
 } else { // Jika guest, simpan ke session
+    // Logika limit tidak berlaku untuk guest/session cart
     if (isset($_SESSION['cart'][$product_id])) {
         $_SESSION['cart'][$product_id]['quantity'] += $quantity_to_add;
     } else {

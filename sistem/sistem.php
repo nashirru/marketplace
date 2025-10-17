@@ -19,7 +19,6 @@ function encode_id($id) {
     $iv = openssl_random_pseudo_bytes(openssl_cipher_iv_length('aes-256-cbc'));
     $encrypted = openssl_encrypt($id, 'aes-256-cbc', ENCRYPTION_KEY, 0, $iv);
     $data = $encrypted . '::' . $iv;
-    // Mengganti karakter + dan / agar aman di URL dan menghapus padding =
     return rtrim(strtr(base64_encode($data), '+/', '-_'), '=');
 }
 
@@ -29,9 +28,7 @@ function encode_id($id) {
  * @return int|false ID asli atau false jika gagal.
  */
 function decode_id($data) {
-    // Mengembalikan karakter - dan _ menjadi + dan /
     $data = strtr($data, '-_', '+/');
-    // Menambahkan kembali padding = yang mungkin hilang
     $data = base64_decode($data . str_repeat('=', (4 - strlen($data) % 4) % 4));
     
     if ($data === false) {
@@ -62,7 +59,7 @@ function flash_message()
         $type    = $_SESSION['flashdata']['type'];
         $message = $_SESSION['flashdata']['message'];
         
-        $color_class = 'bg-blue-500'; // Default
+        $color_class = 'bg-blue-500';
         if ($type === 'success') $color_class = 'bg-green-500';
         elseif ($type === 'error') $color_class = 'bg-red-500';
 
@@ -76,9 +73,14 @@ function flash_message()
 
 /**
  * Mengambil flash message (untuk digunakan di variabel).
+ * Argumen $type kini bersifat opsional.
  */
-function get_flashdata($type)
+function get_flashdata($type = null)
 {
+    if ($type === null) {
+        return $_SESSION['flashdata'] ?? null;
+    }
+
     if (isset($_SESSION['flashdata']) && $_SESSION['flashdata']['type'] === $type) {
         $message = $_SESSION['flashdata']['message'];
         unset($_SESSION['flashdata']);
@@ -116,7 +118,6 @@ function check_admin() {
  */
 function redirect($url)
 {
-    // Cek apakah URL sudah absolut
     if (strpos($url, 'http://') === 0 || strpos($url, 'https://') === 0) {
         header("Location: " . $url);
     } else {
@@ -248,10 +249,9 @@ function get_default_user_address($conn, $user_id) {
 }
 
 function generate_order_number($conn) {
-    $date_part = date('ymd'); // Tahun (2 digit), bulan, tanggal
+    $date_part = date('ymd');
     $day_doubled = date('d') * 2;
     
-    // Hitung jumlah pesanan pada hari ini untuk mendapatkan nomor urut
     $today_start = date('Y-m-d 00:00:00');
     $today_end = date('Y-m-d 23:59:59');
     
@@ -315,7 +315,6 @@ function cancel_overdue_orders($conn) {
 
     $conn->begin_transaction();
     try {
-        // Kembalikan stok
         $stmt_stock = $conn->prepare("
             UPDATE products p
             JOIN order_items oi ON p.id = oi.product_id
@@ -323,7 +322,6 @@ function cancel_overdue_orders($conn) {
             WHERE oi.order_id = ?
         ");
         
-        // Update status pesanan
         $stmt_cancel = $conn->prepare("UPDATE orders SET status = 'cancelled' WHERE id = ?");
 
         foreach ($order_ids_to_cancel as $order_id) {
@@ -345,15 +343,27 @@ function cancel_overdue_orders($conn) {
     }
 }
 
-// ✅ FUNGSI BARU DITAMBAHKAN
+// FUNGSI UNTUK LOGIKA LIMIT PEMBELIAN
 /**
- * Menghitung jumlah produk yang sudah pernah dibeli oleh user.
- * Hanya menghitung dari pesanan yang sudah 'selesai' (completed).
+ * Menghitung jumlah produk yang sudah pernah dibeli oleh user yang terhitung limit.
  */
 function get_user_purchase_count($conn, $user_id, $product_id) {
     if ($user_id <= 0 || $product_id <= 0) {
         return 0;
     }
+
+    $stmt_reset = $conn->prepare("SELECT last_stock_reset, purchase_limit FROM products WHERE id = ?");
+    $stmt_reset->bind_param("i", $product_id);
+    $stmt_reset->execute();
+    $result_reset = $stmt_reset->get_result();
+    $product_data = $result_reset->fetch_assoc();
+    $stmt_reset->close();
+
+    if (empty($product_data) || (int)$product_data['purchase_limit'] <= 0) {
+        return 0;
+    }
+    
+    $last_reset_time = $product_data['last_stock_reset'] ?? '1970-01-01 00:00:00';
     
     $stmt = $conn->prepare("
         SELECT SUM(oi.quantity) as total_bought
@@ -361,9 +371,10 @@ function get_user_purchase_count($conn, $user_id, $product_id) {
         JOIN orders o ON oi.order_id = o.id
         WHERE o.user_id = ? 
           AND oi.product_id = ? 
+          AND o.created_at >= ? 
           AND (o.status = 'completed' OR o.status = 'shipped' OR o.status = 'processed' OR o.status = 'belum_dicetak')
     ");
-    $stmt->bind_param("ii", $user_id, $product_id);
+    $stmt->bind_param("iis", $user_id, $product_id, $last_reset_time);
     $stmt->execute();
     $result = $stmt->get_result();
     $row = $result->fetch_assoc();
@@ -388,4 +399,122 @@ function get_quantity_in_cart($conn, $user_id, $product_id) {
     return (int)($row['quantity'] ?? 0);
 }
 
-?>
+/**
+ * Mengambil batas pembelian produk.
+ */
+function get_product_limit($conn, $product_id) {
+    $stmt = $conn->prepare("SELECT purchase_limit FROM products WHERE id = ?");
+    $stmt->bind_param("i", $product_id);
+    $stmt->execute();
+    $result = $stmt->get_result();
+    $row = $result->fetch_assoc();
+    $stmt->close();
+    return ($row) ? (int)$row['purchase_limit'] : 0; 
+}
+
+
+// --- FUNGSI UNTUK ADMIN PESANAN (DIPERBAIKI) ---
+
+/**
+ * [FIXED] Mengambil data pesanan beserta item-itemnya dengan filter dinamis.
+ * @param mysqli $conn Koneksi database.
+ * @param array $options Opsi filter (status, search, limit, page).
+ * @return array Hasil data pesanan dan total record.
+ */
+function get_orders_with_items_by_status($conn, $options) {
+    $status_filter = $options['status'] ?? 'semua';
+    $search_query = $options['search'] ?? '';
+    $limit = (int)($options['limit'] ?? 10);
+    $current_page = max(1, (int)($options['page'] ?? 1)); // Pastikan minimal 1
+    $offset = max(0, ($current_page - 1) * $limit); // Pastikan tidak negatif
+    
+    // Validasi limit
+    if ($limit <= 0) $limit = 10;
+
+    // Build WHERE conditions
+    $where_conditions = [];
+    $where_clause = "";
+    
+    // Filter Status
+    if ($status_filter !== 'semua') {
+        $where_conditions[] = "o.status = '" . $conn->real_escape_string($status_filter) . "'";
+    }
+
+    // Filter Pencarian
+    if (!empty($search_query)) {
+        $search_term = $conn->real_escape_string($search_query);
+        $where_conditions[] = "(o.order_number LIKE '%{$search_term}%' OR u.name LIKE '%{$search_term}%' OR o.phone_number LIKE '%{$search_term}%')";
+    }
+
+    if (!empty($where_conditions)) {
+        $where_clause = " WHERE " . implode(" AND ", $where_conditions);
+    }
+    
+    // =======================================================
+    // 1. Hitung Total Records
+    // =======================================================
+    $total_query = "SELECT COUNT(o.id) as total FROM orders o LEFT JOIN users u ON o.user_id = u.id" . $where_clause;
+    $result_total = $conn->query($total_query);
+    $total_records = 0;
+    
+    if ($result_total) {
+        $row_total = $result_total->fetch_assoc();
+        $total_records = (int)$row_total['total'];
+    }
+
+    // =======================================================
+    // 2. Ambil Data Pesanan Utama (dengan limit/offset)
+    // =======================================================
+    $orders = [];
+    $sql_orders = "
+        SELECT o.*, u.name as user_name, u.email as user_email
+        FROM orders o
+        LEFT JOIN users u ON o.user_id = u.id
+        {$where_clause}
+        ORDER BY o.created_at DESC 
+        LIMIT {$limit} OFFSET {$offset}
+    ";
+    
+    $result_orders = $conn->query($sql_orders);
+    
+    if ($result_orders) {
+        $order_ids = [];
+        while ($row = $result_orders->fetch_assoc()) {
+            $row['user_name'] = $row['user_name'] ?? 'User Dihapus';
+            $row['user_email'] = $row['user_email'] ?? 'N/A';
+            
+            $orders[$row['id']] = $row;
+            $orders[$row['id']]['items'] = [];
+            $order_ids[] = (int)$row['id'];
+        }
+        
+        // =======================================================
+        // 3. Ambil Item-item untuk Pesanan yang Ditampilkan
+        // =======================================================
+        if (!empty($order_ids)) {
+            $order_ids_str = implode(',', $order_ids);
+            
+            $sql_items = "
+                SELECT oi.*, p.name as product_name, p.image as product_image 
+                FROM order_items oi
+                JOIN products p ON oi.product_id = p.id
+                WHERE oi.order_id IN ({$order_ids_str})
+            ";
+            
+            $result_items = $conn->query($sql_items);
+            
+            if ($result_items) {
+                while ($item = $result_items->fetch_assoc()) {
+                    if (isset($orders[$item['order_id']])) {
+                        $orders[$item['order_id']]['items'][] = $item;
+                    }
+                }
+            }
+        }
+    }
+
+    return [
+        'orders' => array_values($orders),
+        'total' => $total_records
+    ];
+}

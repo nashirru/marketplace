@@ -26,6 +26,8 @@ if ($action == 'edit' && isset($_GET['id'])) {
     $result = $stmt->get_result();
     if ($result->num_rows > 0) {
         $product = $result->fetch_assoc();
+        // Konversi 0 menjadi null jika purchase_limit adalah 0 (dianggap unlimited)
+        $product['purchase_limit'] = ($product['purchase_limit'] == 0) ? null : $product['purchase_limit'];
         $page_title = "Edit Produk: " . htmlspecialchars($product['name']);
     } else {
         set_flashdata('error', 'Produk tidak ditemukan.');

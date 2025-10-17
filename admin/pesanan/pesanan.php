@@ -4,11 +4,11 @@ if (!defined('IS_ADMIN_PAGE')) {
     die('Akses dilarang');
 }
 
-// Ambil semua parameter dari URL
+// Ambil semua parameter dari URL dengan validasi
 $status_filter = $_GET['status'] ?? 'semua';
 $search_query = $_GET['search'] ?? '';
-$limit = (int)($_GET['limit'] ?? 10);
-$current_page = (int)($_GET['page'] ?? 1);
+$limit = max(1, (int)($_GET['limit'] ?? 10)); // Minimal 1
+$current_page = max(1, (int)($_GET['page'] ?? 1)); // Minimal 1
 
 $allowed_statuses = ['semua', 'waiting_payment', 'waiting_approval', 'belum_dicetak', 'processed', 'shipped', 'completed', 'cancelled'];
 if (!in_array($status_filter, $allowed_statuses)) {
@@ -21,6 +21,9 @@ $status_map = [
     'completed' => 'Selesai', 'cancelled' => 'Dibatalkan'
 ];
 
+// Inisialisasi variabel untuk menghindari error tampilan di order_rows.php
+$bulk_action_options = in_array($status_filter, ['waiting_approval', 'processed', 'shipped']);
+
 // Ambil data dari DB menggunakan fungsi baru
 $data = get_orders_with_items_by_status($conn, [
     'status' => $status_filter, 'search' => $search_query,
@@ -28,7 +31,7 @@ $data = get_orders_with_items_by_status($conn, [
 ]);
 $orders = $data['orders'];
 $total_records = $data['total'];
-$total_pages = ceil($total_records / $limit);
+$total_pages = max(1, ceil($total_records / $limit)); // Minimal 1 halaman
 
 function get_status_class($status) {
     $classes = [
@@ -60,7 +63,7 @@ function get_status_class($status) {
             <?php endif; ?>
             <select onchange="window.location.href=this.value" class="border rounded-lg text-sm p-2">
                 <?php foreach ([10, 25, 50] as $l): ?>
-                    <option value="?page=pesanan&status=<?= $status_filter ?>&search=<?= $search_query ?>&limit=<?= $l ?>" <?= $limit == $l ? 'selected' : '' ?>><?= $l ?>/halaman</option>
+                    <option value="?page=pesanan&status=<?= $status_filter ?>&search=<?= urlencode($search_query) ?>&limit=<?= $l ?>" <?= $limit == $l ? 'selected' : '' ?>><?= $l ?>/halaman</option>
                 <?php endforeach; ?>
             </select>
         </div>
@@ -69,7 +72,7 @@ function get_status_class($status) {
     <!-- Navigasi Tab Status -->
     <div class="flex flex-wrap items-center gap-2 mb-4">
         <?php foreach ($status_map as $key => $value): ?>
-            <a href="?page=pesanan&status=<?= $key ?>&search=<?= $search_query ?>&limit=<?= $limit ?>" class="px-3 py-1.5 text-sm font-medium rounded-md transition-colors <?= $status_filter == $key ? 'bg-indigo-600 text-white shadow' : 'text-gray-600 hover:bg-gray-200' ?>">
+            <a href="?page=pesanan&status=<?= $key ?>&search=<?= urlencode($search_query) ?>&limit=<?= $limit ?>" class="px-3 py-1.5 text-sm font-medium rounded-md transition-colors <?= $status_filter == $key ? 'bg-indigo-600 text-white shadow' : 'text-gray-600 hover:bg-gray-200' ?>">
                 <?= $value ?>
             </a>
         <?php endforeach; ?>
@@ -79,7 +82,7 @@ function get_status_class($status) {
         <input type="hidden" name="active_query_string" value="<?= http_build_query($_GET) ?>">
 
         <!-- Tombol Aksi Massal -->
-        <?php if (in_array($status_filter, ['waiting_approval', 'processed', 'shipped'])): ?>
+        <?php if ($bulk_action_options): ?>
         <div class="mb-4 p-2 bg-gray-50 rounded-lg flex items-center gap-4">
             <span class="text-sm font-medium text-gray-700">Aksi untuk item terpilih:</span>
             <?php if($status_filter == 'waiting_approval'): ?>
@@ -98,7 +101,7 @@ function get_status_class($status) {
             <table class="min-w-full divide-y divide-gray-200">
                 <thead class="bg-gray-50">
                     <tr>
-                        <?php if (in_array($status_filter, ['waiting_approval', 'processed', 'shipped'])): ?>
+                        <?php if ($bulk_action_options): ?>
                         <th class="px-4 py-3"><input type="checkbox" onclick="toggleAll(this)"></th>
                         <?php endif; ?>
                         <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Pesanan</th>
@@ -111,7 +114,7 @@ function get_status_class($status) {
                 <tbody class="bg-white divide-y divide-gray-200">
                     <?php if (!empty($orders)): foreach ($orders as $order): ?>
                         <tr>
-                            <?php if (in_array($status_filter, ['waiting_approval', 'processed', 'shipped'])): ?>
+                            <?php if ($bulk_action_options): ?>
                             <td class="px-4 py-4"><input type="checkbox" name="selected_orders[]" value="<?= $order['id'] ?>" class="order-checkbox"></td>
                             <?php endif; ?>
                             <td class="px-6 py-4"><div class="font-bold text-indigo-600"><?= htmlspecialchars($order['order_number']) ?></div><div class="text-xs text-gray-500"><?= date('d M Y, H:i', strtotime($order['created_at'])) ?></div></td>
@@ -136,19 +139,21 @@ function get_status_class($status) {
                             </td>
                         </tr>
                         <tr id="details-<?= $order['id'] ?>" class="hidden bg-gray-50">
-                            <td colspan="<?= in_array($status_filter, ['waiting_approval', 'processed', 'shipped']) ? 6 : 5 ?>" class="p-4">
+                            <td colspan="<?= $bulk_action_options ? 6 : 5 ?>" class="p-4">
                                 <!-- Detail Content -->
                                 <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
                                     <div>
                                         <h4 class="font-semibold text-xs mb-2 text-gray-600">ITEM PESANAN:</h4>
                                         <div class="space-y-2">
-                                            <?php foreach($order['items'] as $item): ?>
+                                            <?php if (!empty($order['items'])): foreach($order['items'] as $item): ?>
                                                 <div class="flex items-center text-xs text-gray-700">
                                                     <img src="<?= BASE_URL ?>/assets/images/produk/<?= htmlspecialchars($item['product_image']) ?>" class="w-8 h-8 rounded object-cover mr-3 border">
                                                     <span class="flex-grow"><?= htmlspecialchars($item['product_name']) ?></span>
                                                     <span class="font-medium">x <?= $item['quantity'] ?></span>
                                                 </div>
-                                            <?php endforeach; ?>
+                                            <?php endforeach; else: ?>
+                                                <p class="text-xs text-gray-500">Tidak ada item</p>
+                                            <?php endif; ?>
                                         </div>
                                     </div>
                                     <?php if(!empty($order['payment_proof'])): ?>
@@ -163,7 +168,7 @@ function get_status_class($status) {
                             </td>
                         </tr>
                     <?php endforeach; else: ?>
-                        <tr><td colspan="<?= in_array($status_filter, ['waiting_approval', 'processed', 'shipped']) ? 6 : 5 ?>" class="text-center py-10 text-gray-500">Tidak ada pesanan ditemukan.</td></tr>
+                        <tr><td colspan="<?= $bulk_action_options ? 6 : 5 ?>" class="text-center py-10 text-gray-500">Tidak ada pesanan ditemukan.</td></tr>
                     <?php endif; ?>
                 </tbody>
             </table>
@@ -171,20 +176,24 @@ function get_status_class($status) {
     </form>
     
     <!-- Form-form individual untuk setiap aksi -->
-    <?php foreach($orders as $order): ?>
+    <?php if (!empty($orders)): foreach($orders as $order): ?>
         <form id="form-approve-<?= $order['id'] ?>" method="POST" action="<?= BASE_URL ?>/admin/admin.php"><input type="hidden" name="order_id" value="<?= $order['id'] ?>"><input type="hidden" name="action" value="approve_payment"><input type="hidden" name="active_query_string" value="<?= http_build_query($_GET) ?>"></form>
         <form id="form-reject-<?= $order['id'] ?>" method="POST" action="<?= BASE_URL ?>/admin/admin.php"><input type="hidden" name="order_id" value="<?= $order['id'] ?>"><input type="hidden" name="action" value="reject_payment"><input type="hidden" name="active_query_string" value="<?= http_build_query($_GET) ?>"></form>
         <form id="form-process-<?= $order['id'] ?>" method="POST" action="<?= BASE_URL ?>/admin/admin.php"><input type="hidden" name="order_id" value="<?= $order['id'] ?>"><input type="hidden" name="action" value="process_order"><input type="hidden" name="active_query_string" value="<?= http_build_query($_GET) ?>"></form>
         <form id="form-ship-<?= $order['id'] ?>" method="POST" action="<?= BASE_URL ?>/admin/admin.php"><input type="hidden" name="order_id" value="<?= $order['id'] ?>"><input type="hidden" name="action" value="ship_order"><input type="hidden" name="active_query_string" value="<?= http_build_query($_GET) ?>"></form>
         <form id="form-complete-<?= $order['id'] ?>" method="POST" action="<?= BASE_URL ?>/admin/admin.php"><input type="hidden" name="order_id" value="<?= $order['id'] ?>"><input type="hidden" name="action" value="complete_order"><input type="hidden" name="active_query_string" value="<?= http_build_query($_GET) ?>"></form>
-    <?php endforeach; ?>
+    <?php endforeach; endif; ?>
 
     <!-- Paginasi -->
     <div class="flex items-center justify-between border-t border-gray-200 px-4 py-3 mt-4">
-        <p class="text-sm text-gray-700">Menampilkan <?= min(($current_page - 1) * $limit + 1, $total_records) ?> - <?= min($current_page * $limit, $total_records) ?> dari <?= $total_records ?> hasil</p>
+        <?php 
+            $start_index = ($total_records > 0) ? max(1, ($current_page - 1) * $limit + 1) : 0;
+            $end_index = min($current_page * $limit, $total_records);
+        ?>
+        <p class="text-sm text-gray-700">Menampilkan <?= $start_index ?> - <?= $end_index ?> dari <?= $total_records ?> hasil</p>
         <nav class="inline-flex rounded-md shadow-sm -space-x-px">
             <?php for ($i = 1; $i <= $total_pages; $i++): ?>
-                <a href="?page=pesanan&status=<?= $status_filter ?>&search=<?= $search_query ?>&limit=<?= $limit ?>&page=<?= $i ?>" class="<?= $i == $current_page ? 'z-10 bg-indigo-50 border-indigo-500 text-indigo-600' : 'bg-white border-gray-300 text-gray-500 hover:bg-gray-50' ?> relative inline-flex items-center px-4 py-2 border text-sm font-medium">
+                <a href="?page=pesanan&status=<?= $status_filter ?>&search=<?= urlencode($search_query) ?>&limit=<?= $limit ?>&page=<?= $i ?>" class="<?= $i == $current_page ? 'z-10 bg-indigo-50 border-indigo-500 text-indigo-600' : 'bg-white border-gray-300 text-gray-500 hover:bg-gray-50' ?> relative inline-flex items-center px-4 py-2 border text-sm font-medium">
                     <?= $i ?>
                 </a>
             <?php endfor; ?>
