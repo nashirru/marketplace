@@ -198,7 +198,8 @@ $active_tab = $_GET['tab'] ?? 'orders';
                                     </div>
                                     <div class="flex items-center gap-2">
                                         <?php if ($order['status'] == 'waiting_payment'): ?>
-                                            <a href="<?= BASE_URL ?>/checkout/upload.php?id=<?= $order['order_hash'] ?>" class="text-sm text-white bg-green-600 hover:bg-green-700 px-3 py-1.5 rounded-md transition shadow">
+                                            <!-- ✅ PERBAIKAN: Menggunakan order_hash -->
+                                            <a href="<?= BASE_URL ?>/checkout/upload.php?hash=<?= $order['order_hash'] ?>" class="text-sm text-white bg-green-600 hover:bg-green-700 px-3 py-1.5 rounded-md transition shadow">
                                                 Upload Bukti Bayar
                                             </a>
                                         <?php endif; ?>

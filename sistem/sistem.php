@@ -51,7 +51,7 @@ function set_flashdata($type, $message)
 }
 
 /**
- * Menampilkan flash message.
+ * ✅ NOTIFIKASI BARU: Desain lebih clean dengan background putih.
  */
 function flash_message()
 {
@@ -59,21 +59,47 @@ function flash_message()
         $type    = $_SESSION['flashdata']['type'];
         $message = $_SESSION['flashdata']['message'];
         
-        $color_class = 'bg-blue-500';
-        if ($type === 'success') $color_class = 'bg-green-500';
-        elseif ($type === 'error') $color_class = 'bg-red-500';
+        $icon_class = 'fa-info-circle';
+        $color_class = 'text-blue-500';
+        $border_color = 'border-blue-500';
 
-        echo "<div id='flashdata' class='fixed top-5 right-5 z-50 p-4 rounded-md shadow-lg text-white {$color_class} animate-fade-in-out'><p>" . htmlspecialchars($message) . "</p></div>
-        <script>setTimeout(() => { const el = document.getElementById('flashdata'); if (el) el.style.opacity = '0'; setTimeout(() => el ? el.remove() : null, 500); }, 3000);</script>
-        <style>@keyframes fade-in-out { 0%,100% { opacity:0; } 10%,90% { opacity:1; } } .animate-fade-in-out { animation: fade-in-out 3.5s; }</style>";
+        if ($type === 'success') {
+            $icon_class = 'fa-check-circle';
+            $color_class = 'text-green-500';
+            $border_color = 'border-green-500';
+        } elseif ($type === 'error') {
+            $icon_class = 'fa-times-circle';
+            $color_class = 'text-red-500';
+            $border_color = 'border-red-500';
+        }
+
+        echo "
+        <div id='flashdata' class='fixed top-5 right-5 z-50 p-4 rounded-lg shadow-lg bg-white {$border_color} border-l-4 flex items-center animate-fade-in-out'>
+            <i class='fas {$icon_class} {$color_class} text-2xl mr-3'></i>
+            <div>
+                <p class='font-semibold text-gray-800'>" . ucfirst($type) . "</p>
+                <p class='text-sm text-gray-600'>" . htmlspecialchars($message) . "</p>
+            </div>
+        </div>
+        <script>setTimeout(() => { const el = document.getElementById('flashdata'); if (el) { el.style.opacity = '0'; el.style.transform = 'translateX(100%)'; } setTimeout(() => el ? el.remove() : null, 500); }, 4000);</script>
+        <style>
+            #flashdata { transition: opacity 0.5s, transform 0.5s; }
+            @keyframes fade-in-out { 
+                0% { opacity: 0; transform: translateX(100%); } 
+                10% { opacity: 1; transform: translateX(0); }
+                90% { opacity: 1; transform: translateX(0); }
+                100% { opacity: 0; transform: translateX(100%); } 
+            } 
+            .animate-fade-in-out { animation: fade-in-out 4.5s ease-in-out; }
+        </style>";
         
         unset($_SESSION['flashdata']);
     }
 }
 
+
 /**
  * Mengambil flash message (untuk digunakan di variabel).
- * Argumen $type kini bersifat opsional.
  */
 function get_flashdata($type = null)
 {

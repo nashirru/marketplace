@@ -3,9 +3,8 @@
 if (!defined('IS_ADMIN_PAGE')) die('Akses dilarang');
 
 $action = $_GET['action'] ?? 'list';
-$banner = null; // Variabel untuk data banner jika mode edit
+$banner = null;
 
-// Jika mode edit, ambil data banner
 if ($action == 'edit' && isset($_GET['id'])) {
     $banner_id = (int)$_GET['id'];
     $stmt = $conn->prepare("SELECT * FROM banners WHERE id = ?");
@@ -15,8 +14,8 @@ if ($action == 'edit' && isset($_GET['id'])) {
     if ($result->num_rows > 0) {
         $banner = $result->fetch_assoc();
     } else {
-        set_flash_message('error', 'Banner tidak ditemukan.');
-        $action = 'list'; // Kembali ke daftar jika tidak ditemukan
+        set_flashdata('error', 'Banner tidak ditemukan.');
+        redirect('/admin/admin.php?page=banner');
     }
     $stmt->close();
 }
@@ -26,18 +25,18 @@ if ($action == 'edit' && isset($_GET['id'])) {
 
 <div class="flex justify-between items-center mb-6">
     <h2 class="text-2xl font-semibold text-gray-700">Daftar Banner</h2>
-    <a href="?page=banner&action=add" class="px-4 py-2 bg-indigo-600 text-white rounded-md hover:bg-indigo-700 transition duration-150">Tambah Banner Baru</a>
+    <a href="?page=banner&action=add" class="px-4 py-2 bg-indigo-600 text-white rounded-md hover:bg-indigo-700 transition">Tambah Banner Baru</a>
 </div>
 
 <div class="bg-white p-6 rounded-lg shadow-md overflow-x-auto">
     <table class="min-w-full divide-y divide-gray-200">
-        <thead>
+        <thead class="bg-gray-50">
             <tr>
-                <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Gambar</th>
-                <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Judul</th>
-                <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Link URL</th>
-                <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Aktif</th>
-                <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Aksi</th>
+                <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Gambar</th>
+                <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Judul</th>
+                <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Link</th>
+                <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Status</th>
+                <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Aksi</th>
             </tr>
         </thead>
         <tbody class="divide-y divide-gray-200">
@@ -53,21 +52,19 @@ if ($action == 'edit' && isset($_GET['id'])) {
                 <td class="px-4 py-4 whitespace-nowrap text-sm text-gray-900"><?= htmlspecialchars($row['title']) ?></td>
                 <td class="px-4 py-4 whitespace-nowrap text-sm text-gray-500">
                     <a href="<?= htmlspecialchars($row['link_url']) ?>" target="_blank" class="text-indigo-600 hover:text-indigo-900 truncate max-w-xs block">
-                        <?= htmlspecialchars($row['link_url']) ?: '-' ?>
+                        <?= htmlspecialchars($row['link_url'] ?: '-') ?>
                     </a>
                 </td>
                 <td class="px-4 py-4 whitespace-nowrap">
                     <span class="px-2 inline-flex text-xs leading-5 font-semibold rounded-full <?= $row['is_active'] ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800' ?>">
-                        <?= $row['is_active'] ? 'Ya' : 'Tidak' ?>
+                        <?= $row['is_active'] ? 'Aktif' : 'Nonaktif' ?>
                     </span>
                 </td>
-                <td class="px-4 py-4 whitespace-nowrap text-sm font-medium">
-                    <a href="?page=banner&action=edit&id=<?= $row['id'] ?>" class="text-indigo-600 hover:text-indigo-900 mr-4">Edit</a>
-                    
-                    <form method="POST" action="admin.php" class="inline-block" onsubmit="return confirm('Apakah Anda yakin ingin menghapus banner ini?');">
-                        <input type="hidden" name="delete_banner" value="1">
+                <td class="px-4 py-4 whitespace-nowrap text-sm font-medium flex items-center gap-4">
+                    <a href="?page=banner&action=edit&id=<?= $row['id'] ?>" class="text-indigo-600 hover:text-indigo-900">Edit</a>
+                    <form method="POST" action="<?= BASE_URL ?>/admin/admin.php" class="inline-block" onsubmit="return confirm('Yakin ingin menghapus banner ini?');">
                         <input type="hidden" name="id" value="<?= $row['id'] ?>">
-                        <button type="submit" class="text-red-600 hover:text-red-900">Hapus</button>
+                        <button type="submit" name="delete_banner" class="text-red-600 hover:text-red-900">Hapus</button>
                     </form>
                 </td>
             </tr>
@@ -88,11 +85,8 @@ if ($action == 'edit' && isset($_GET['id'])) {
 <div class="bg-white p-6 rounded-lg shadow-md max-w-3xl mx-auto">
     <h2 class="text-xl font-semibold mb-4"><?= $action == 'add' ? 'Tambah' : 'Edit' ?> Banner</h2>
     
-    <form method="POST" action="admin.php" enctype="multipart/form-data">
-        <input type="hidden" name="save_banner" value="1">
-        <?php if ($action == 'edit'): ?>
-            <input type="hidden" name="id" value="<?= $banner['id'] ?>">
-        <?php endif; ?>
+    <form method="POST" action="<?= BASE_URL ?>/admin/admin.php" enctype="multipart/form-data">
+        <input type="hidden" name="id" value="<?= $banner['id'] ?? '' ?>">
 
         <div class="space-y-4">
             <div>
@@ -102,33 +96,33 @@ if ($action == 'edit' && isset($_GET['id'])) {
             
             <div>
                 <label for="link_url" class="block text-sm font-medium text-gray-700">Link URL (Opsional)</label>
-                <input type="url" name="link_url" id="link_url" value="<?= htmlspecialchars($banner['link_url'] ?? '') ?>" placeholder="Contoh: https://warokkite.com/promosi" class="mt-1 block w-full border border-gray-300 rounded-md shadow-sm p-2">
-                <p class="mt-1 text-xs text-gray-500">Link ini akan dituju saat banner diklik.</p>
+                <input type="url" name="link_url" id="link_url" value="<?= htmlspecialchars($banner['link_url'] ?? '') ?>" placeholder="https://..." class="mt-1 block w-full border border-gray-300 rounded-md shadow-sm p-2">
             </div>
             
             <div>
-                <label for="is_active" class="flex items-center space-x-2 text-sm font-medium text-gray-700">
-                    <input type="checkbox" name="is_active" id="is_active" value="1" <?= (!isset($banner) || $banner['is_active']) ? 'checked' : '' ?> class="h-4 w-4 text-indigo-600 border-gray-300 rounded">
-                    <span>Banner Aktif (Tampilkan di halaman depan)</span>
+                <label class="flex items-center">
+                    <input type="checkbox" name="is_active" value="1" <?= (!isset($banner) || $banner['is_active']) ? 'checked' : '' ?> class="h-4 w-4 text-indigo-600 border-gray-300 rounded">
+                    <span class="ml-2 text-sm text-gray-700">Aktifkan banner</span>
                 </label>
             </div>
 
             <div>
                 <label for="image" class="block text-sm font-medium text-gray-700">Gambar Banner</label>
                 <input type="file" name="image" id="image" class="mt-1 block w-full text-sm" <?= $action == 'add' ? 'required' : '' ?>>
-                
-                <?php if($action == 'edit' && $banner['image']): ?>
-                <p class="mt-2 text-xs text-gray-500">Gambar saat ini:</p>
-                <img src="<?= BASE_URL ?>/assets/images/banner/<?= $banner['image'] ?>" alt="<?= htmlspecialchars($banner['title']) ?>" class="mt-2 h-24 object-cover rounded shadow-md border">
+                <?php if($action == 'edit' && !empty($banner['image'])): ?>
+                <div class="mt-2">
+                    <p class="text-xs text-gray-500">Gambar saat ini:</p>
+                    <img src="<?= BASE_URL ?>/assets/images/banner/<?= $banner['image'] ?>" class="mt-1 h-24 object-cover rounded shadow-md border">
+                </div>
                 <?php endif; ?>
             </div>
         </div>
         
         <div class="mt-6 flex gap-2">
-            <button type="submit" name="save_banner" class="px-4 py-2 bg-indigo-600 text-white rounded-md hover:bg-indigo-700 transition duration-150">
+            <button type="submit" name="save_banner" class="px-4 py-2 bg-indigo-600 text-white rounded-md hover:bg-indigo-700">
                 Simpan Banner
             </button>
-            <a href="?page=banner" class="px-4 py-2 bg-gray-200 text-gray-800 rounded-md hover:bg-gray-300 transition duration-150">Batal</a>
+            <a href="?page=banner" class="px-4 py-2 bg-gray-200 text-gray-800 rounded-md hover:bg-gray-300">Batal</a>
         </div>
     </form>
 </div>

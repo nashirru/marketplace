@@ -23,12 +23,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $address_line_2 = sanitize_input($_POST['address_line_2'] ?? '');
     $is_default = isset($_POST['is_default']) ? 1 : 0;
 
-    // Cek apakah data yang dibutuhkan sudah lengkap
     if (empty($payment_method_id) || empty($full_name) || empty($phone_number) || 
         empty($province) || empty($city) || empty($address_line_1)) {
         set_flashdata('error', 'Semua kolom alamat wajib diisi (kecuali Detail Tambahan).');
-        header("Location: " . BASE_URL . "/checkout/checkout.php");
-        exit;
+        redirect("/checkout/checkout.php");
     }
 
     // 2. LOGIKA PENYIMPANAN/PEMBARUAN ALAMAT PENGGUNA
@@ -36,7 +34,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $conn->begin_transaction();
 
         $address_id = null;
-        // Cek apakah alamat sudah ada
         $stmt_check = $conn->prepare("
             SELECT id FROM user_addresses 
             WHERE user_id = ? AND full_name = ? AND phone_number = ? 
@@ -52,7 +49,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $existing_address = $result_check->fetch_assoc();
             $address_id = $existing_address['id'];
         } else {
-            // Insert alamat baru
             $stmt_insert = $conn->prepare("
                 INSERT INTO user_addresses 
                 (user_id, full_name, phone_number, province, city, subdistrict, 
@@ -68,7 +64,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         }
         $stmt_check->close();
         
-        // Handle is_default
         if ($is_default == 1) {
             $stmt_default_off = $conn->prepare("UPDATE user_addresses SET is_default = 0 WHERE user_id = ? AND id != ?");
             $stmt_default_off->bind_param("ii", $user_id, $address_id);
@@ -82,37 +77,33 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         }
 
 
-        // 3. AMBIL ITEM KERANJANG DAN HITUNG TOTAL
+        // 3. AMBIL ITEM KERANJANG
         $cart_items = get_cart_items($conn, $user_id);
 
         if (empty($cart_items)) {
             set_flashdata('error', 'Keranjang Anda kosong. Tidak dapat memproses checkout.');
             $conn->rollback();
-            header("Location: " . BASE_URL . "/cart/cart.php");
-            exit;
+            redirect("/cart/cart.php");
         }
 
-        // PENGECEKAN ULANG BATAS PEMBELIAN
+        // PENGECEKAN FINAL BATAS PEMBELIAN SEBELUM BUAT PESANAN
         foreach ($cart_items as $item) {
-            // Menggunakan fungsi get_product_limit dari sistem.php
             $product_limit = get_product_limit($conn, $item['product_id']);
             if ($product_limit > 0) {
-                // Menggunakan fungsi get_user_purchase_count dari sistem.php
                 $already_bought = get_user_purchase_count($conn, $user_id, $item['product_id']);
                 
                 if (($already_bought + $item['quantity']) > $product_limit) {
                     $conn->rollback();
-                    set_flashdata('error', "Anda melebihi batas pembelian ({$product_limit}) untuk produk " . htmlspecialchars($item['name']) . ". Silakan kurangi kuantitas di keranjang.");
-                    header("Location: " . BASE_URL . "/cart/cart.php");
-                    exit;
+                    $sisa_kuota = max(0, $product_limit - $already_bought);
+                    $message = "Pembelian untuk '" . htmlspecialchars($item['name']) . "' melebihi batas. Sisa kuota pembelian Anda adalah {$sisa_kuota} buah. Harap sesuaikan kuantitas di keranjang.";
+                    set_flashdata('error', $message);
+                    redirect("/cart/cart.php");
                 }
             }
         }
-        // END PENGECEKAN ULANG
 
         $total = 0;
         foreach ($cart_items as $item) {
-            // Hitung subtotal secara manual di sini
             $total += $item['price'] * $item['quantity'];
         }
 
@@ -150,22 +141,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         ");
         
         foreach ($cart_items as $item) {
-            // Insert item
-            $stmt_item->bind_param("iiid", $order_id, $item['product_id'], 
-                $item['quantity'], $item['price']);
+            $stmt_item->bind_param("iiid", $order_id, $item['product_id'], $item['quantity'], $item['price']);
             $stmt_item->execute();
             
-            // Update stok
-            $stmt_stock->bind_param("iii", $item['quantity'], 
-                $item['product_id'], $item['quantity']);
+            $stmt_stock->bind_param("iii", $item['quantity'], $item['product_id'], $item['quantity']);
             $stmt_stock->execute();
             
-            // Cek apakah stok cukup
             if ($stmt_stock->affected_rows === 0) {
                 $conn->rollback();
                 set_flashdata('error', 'Stok produk "' . htmlspecialchars($item['name']) . '" tidak mencukupi.');
-                header("Location: " . BASE_URL . "/cart/cart.php");
-                exit;
+                redirect("/cart/cart.php");
             }
 
         }
@@ -181,24 +166,19 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $conn->commit();
 
         set_flashdata('success', 'Pesanan berhasil dibuat. Silakan unggah bukti pembayaran.');
-        header("Location: " . BASE_URL . "/checkout/upload.php?hash=" . $order_hash);
-        exit;
+        redirect("/checkout/upload.php?hash=" . $order_hash);
 
     } catch (Exception $e) {
         $conn->rollback();
         error_log("Checkout Error: " . $e->getMessage());
         set_flashdata('error', 'Terjadi kesalahan: ' . htmlspecialchars($e->getMessage()));
-        header("Location: " . BASE_URL . "/checkout/checkout.php");
-        exit;
+        redirect("/checkout/checkout.php");
     }
 }
-
-// LOGIKA LAMA: get_product_limit di sini Dihapus karena sudah ada di sistem.php
 
 // --- PEMUATAN DATA UNTUK TAMPILAN ---
 $cart_items = get_cart_items($conn, $user_id);
 $subtotal = 0;
-// Hitung subtotal manual untuk tampilan juga
 foreach ($cart_items as &$item) {
     $item['subtotal'] = $item['price'] * $item['quantity'];
     $subtotal += $item['subtotal'];
@@ -225,8 +205,6 @@ $address_data = [
 ];
 
 $flash = get_flashdata();
-$flash_message = $flash['message'] ?? null;
-$flash_type = $flash['type'] ?? '';
 ?>
 <!DOCTYPE html>
 <html lang="id">

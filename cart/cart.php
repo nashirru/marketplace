@@ -42,26 +42,19 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['ajax'])) {
 
     // 2. Cek Stok
     if ($quantity > $max_stock) {
-        // Jika kuantitas melebihi stok, paksa nilai kembali ke stok maksimum
         send_json_response(['success' => false, 'message' => 'Stok produk hanya tersedia ' . $max_stock . ' buah.', 'newQuantity' => $max_stock, 'limitViolation' => true]);
     }
 
     // 3. Cek Limit Pembelian (Hanya jika user login dan limit > 0)
     if ($user_id && $purchase_limit > 0) {
-        // Ambil kuantitas yang SUDAH dibeli (sejak reset terakhir)
         $already_bought = get_user_purchase_count($conn, $user_id, $product_id);
         
-        // Total kuantitas user (sudah dibeli + di keranjang)
-        $total_quantity = $already_bought + $quantity;
-
-        if ($total_quantity > $purchase_limit) {
-            // Hitung kuantitas maksimum yang diizinkan di keranjang
+        if (($already_bought + $quantity) > $purchase_limit) {
             $allowed_in_cart = max(0, $purchase_limit - $already_bought);
             
-            // Jika kuantitas melebihi limit, kembalikan ke batas yang diizinkan
             send_json_response([
                 'success' => false, 
-                'message' => 'Anda sudah membeli ' . $already_bought . ' buah. Batas pembelian Anda hanya ' . $purchase_limit . ' buah. Kuantitas maksimum yang diizinkan di keranjang adalah ' . $allowed_in_cart . '.', 
+                'message' => 'Anda sudah membeli ' . $already_bought . ' buah. Batas pembelian Anda hanya ' . $purchase_limit . ' buah. Kuantitas maksimum di keranjang adalah ' . $allowed_in_cart . '.', 
                 'newQuantity' => $allowed_in_cart, 
                 'limitViolation' => true
             ]);
@@ -89,7 +82,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['ajax'])) {
     $total_items = 0;
     $cart_data_for_calc = [];
 
-    // Logika perhitungan total (tidak berubah)
     if ($user_id) {
         $stmt = $conn->prepare("SELECT c.quantity, p.price FROM cart c JOIN products p ON c.product_id = p.id WHERE c.user_id = ?");
         $stmt->bind_param("i", $user_id);
@@ -123,7 +115,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['ajax'])) {
         'newSubtotalFormatted' => format_rupiah($product['price'] * $quantity),
         'newGrandTotalFormatted' => format_rupiah($total_price),
         'newCartCount' => $total_items,
-        'newQuantity' => $quantity // Kirim kuantitas yang berhasil di-set
+        'newQuantity' => $quantity
     ]);
 }
 // --- Handle form non-ajax (tombol hapus) ---
@@ -157,7 +149,6 @@ $user_id = $_SESSION['user_id'] ?? null;
 $cart_items = [];
 $total_price = 0;
 
-// Ambil item keranjang dengan limit dan waktu reset
 if ($user_id) {
     $stmt = $conn->prepare("
         SELECT 
@@ -179,7 +170,6 @@ if ($user_id) {
     if (!empty($_SESSION['cart'])) {
         $product_ids = array_keys($_SESSION['cart']);
         $placeholders = implode(',', array_fill(0, count($product_ids), '?'));
-        // Ambil data produk termasuk limit
         $stmt = $conn->prepare("SELECT id as product_id, name, price, image, stock, purchase_limit FROM products WHERE id IN ($placeholders)");
         $stmt->bind_param(str_repeat('i', count($product_ids)), ...$product_ids);
         $stmt->execute();
@@ -196,7 +186,7 @@ if ($user_id) {
                     'image'=>$product['image'], 
                     'quantity'=>$item['quantity'], 
                     'stock'=>$product['stock'],
-                    'purchase_limit'=>$product['purchase_limit'] // Tambahkan limit
+                    'purchase_limit'=>$product['purchase_limit']
                 ];
                 $total_price += $product['price'] * $item['quantity'];
             }
@@ -215,15 +205,8 @@ $page_title = "Keranjang Belanja";
     <script src="https://cdn.tailwindcss.com"></script>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css">
     <style>
-        .quantity-input {
-            appearance: none;
-            -moz-appearance: textfield;
-        }
-        .quantity-input::-webkit-outer-spin-button,
-        .quantity-input::-webkit-inner-spin-button {
-            -webkit-appearance: none;
-            margin: 0;
-        }
+        .quantity-input { appearance: none; -moz-appearance: textfield; }
+        .quantity-input::-webkit-outer-spin-button, .quantity-input::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
     </style>
 </head>
 <body class="bg-gray-100">
@@ -254,24 +237,17 @@ $page_title = "Keranjang Belanja";
                         </div>
 
                         <?php 
-                        $total_items_count = 0;
                         foreach ($cart_items as $item): 
-                            $total_items_count += $item['quantity'];
                             $limit_text = '';
                             if (isset($item['purchase_limit']) && (int)$item['purchase_limit'] > 0 && $user_id) {
-                                // Pengecekan awal saat render
                                 $already_bought = get_user_purchase_count($conn, $user_id, $item['product_id']);
                                 $allowed_in_cart = max(0, (int)$item['purchase_limit'] - $already_bought);
-
                                 $limit_text = "Limit: {$item['purchase_limit']} ";
                                 if ($already_bought > 0) {
                                     $limit_text .= "(Sudah beli {$already_bought})";
                                 }
-
-                                // Batasi input max di HTML ke stok atau limit yang tersisa
-                                $max_qty_input = min((int)$item['stock'], $allowed_in_cart + $item['quantity']); 
+                                $max_qty_input = min((int)$item['stock'], $allowed_in_cart);
                             } else {
-                                // Jika tidak ada limit atau guest, batasi hanya ke stok
                                 $max_qty_input = (int)$item['stock']; 
                             }
                         ?>
@@ -296,13 +272,7 @@ $page_title = "Keranjang Belanja";
                                     <div class="flex items-center border border-gray-300 rounded-md">
                                         <button class="quantity-change-btn p-2 text-gray-600 hover:bg-gray-100 rounded-l-md" data-product-id="<?= $item['product_id'] ?>" data-change="-1">-</button>
                                         <input type="number" class="quantity-input w-12 text-center border-l border-r" 
-                                            value="<?= $item['quantity'] ?>" 
-                                            min="1" 
-                                            max="<?= $max_qty_input ?>" 
-                                            data-product-id="<?= $item['product_id'] ?>"
-                                            data-limit="<?= $item['purchase_limit'] ?? 0 ?>"
-                                            data-user-id="<?= $user_id ? 1 : 0 ?>"
-                                        >
+                                            value="<?= $item['quantity'] ?>" min="1" max="<?= $max_qty_input ?>" data-product-id="<?= $item['product_id'] ?>">
                                         <button class="quantity-change-btn p-2 text-gray-600 hover:bg-gray-100 rounded-r-md" data-product-id="<?= $item['product_id'] ?>" data-change="1">+</button>
                                     </div>
                                 </div>
@@ -336,17 +306,7 @@ $page_title = "Keranjang Belanja";
             };
         }
 
-        async function updateCart(productId, quantity, isLimitCheckRequired) {
-            const inputElement = document.querySelector(`.quantity-input[data-product-id="${productId}"]`);
-            if (quantity === 0) {
-                 // Tidak melakukan update cart, biarkan user hapus manual atau set ke 1
-                 if (isLimitCheckRequired) {
-                    alert(`Kuantitas tidak dapat menjadi 0 jika Anda ingin tetap memiliki kuota pembelian.`);
-                 }
-                 inputElement.value = 1;
-                 quantity = 1;
-            }
-
+        async function updateCart(productId, quantity) {
             const formData = new FormData();
             formData.append('product_id', productId);
             formData.append('quantity', quantity);
@@ -357,9 +317,10 @@ $page_title = "Keranjang Belanja";
                 const response = await fetch('', { method: 'POST', body: formData });
                 if (!response.ok) throw new Error('Network response was not ok.');
                 const result = await response.json();
+                
+                const inputElement = document.querySelector(`.quantity-input[data-product-id="${productId}"]`);
 
                 if (result.success) {
-                    // Update tampilan
                     document.getElementById(`subtotal-${productId}`).textContent = result.newSubtotalFormatted;
                     document.getElementById('summary-subtotal').textContent = result.newGrandTotalFormatted;
                     document.getElementById('summary-total').textContent = result.newGrandTotalFormatted;
@@ -373,29 +334,20 @@ $page_title = "Keranjang Belanja";
                             cartBadge.style.display = 'none';
                         }
                     }
-                    // Jika ada pelanggaran stok/limit, PHP akan mengembalikan newQuantity yang valid
                     if (result.newQuantity && inputElement.value != result.newQuantity) {
                         inputElement.value = result.newQuantity;
                     }
                 } else {
-                    // Jika ada error (misal limit atau stok)
                     alert(result.message || 'Gagal memperbarui keranjang.');
-                    
-                    if (result.limitViolation) {
-                        // Jika ada pelanggaran, set input kembali ke nilai yang diizinkan
+                    if (result.newQuantity !== undefined && inputElement) {
                         inputElement.value = result.newQuantity;
-                        
-                        // Setelah nilai input dikembalikan, jalankan update lagi dengan nilai yang valid (tanpa debounce)
-                        if(result.newQuantity !== undefined) {
-                            updateCart(productId, result.newQuantity, false); 
+                        if(result.newQuantity > 0) {
+                           updateCart(productId, result.newQuantity); 
+                        } else {
+                           window.location.reload();
                         }
-                    } else if (result.newQuantity) {
-                         // Untuk error stok, kembalikan ke stok maksimum
-                        inputElement.value = result.newQuantity;
-                        updateCart(productId, result.newQuantity, false);
                     }
                 }
-
             } catch (error) {
                 console.error('Error updating cart:', error);
                 alert('Terjadi kesalahan. Silakan coba lagi.');
@@ -414,23 +366,13 @@ $page_title = "Keranjang Belanja";
                     if (input) {
                         let oldValue = parseInt(input.value);
                         let newValue = oldValue + change;
-                        
-                        // Batasan di sisi klien (agar terlihat cepat, namun validasi utama tetap di server)
                         const maxAllowed = parseInt(input.max);
 
-                        if (newValue >= 1 && newValue <= maxAllowed) {
-                            input.value = newValue;
-                            updateCart(productId, newValue, true);
-                        } else if (newValue < 1) {
-                            // Opsi: user harus menghapus
-                            alert('Silakan gunakan tombol Hapus di bawah produk untuk menghapus item dari keranjang.');
-                        } else if (newValue > maxAllowed) {
-                             // Jika max di HTML sudah dihitung dengan limit yang tersisa, alert sesuai max
-                             alert(`Kuantitas melebihi batas yang diizinkan (${maxAllowed}).`);
-                             // Paksa kembali ke max, dan update cart untuk validasi server terakhir
-                             input.value = maxAllowed;
-                             updateCart(productId, maxAllowed, true);
-                        }
+                        if (newValue < 1) newValue = 1;
+                        if (newValue > maxAllowed) newValue = maxAllowed;
+                        
+                        input.value = newValue;
+                        debouncedUpdateCart(productId, newValue);
                     }
                 });
             });
@@ -439,20 +381,16 @@ $page_title = "Keranjang Belanja";
                 input.addEventListener('input', function() {
                     const productId = this.dataset.productId;
                     let quantity = parseInt(this.value);
-                    const maxStock = parseInt(this.max);
-                    const currentLimit = parseInt(this.dataset.limit);
+                    const maxAllowed = parseInt(this.max);
 
                     if (isNaN(quantity) || quantity < 1) return;
                     
-                    // Batasan stok di sisi klien (agar terlihat cepat)
-                    if (quantity > maxStock) {
-                        this.value = maxStock;
-                        quantity = maxStock;
-                        alert(`Stok hanya tersisa ${maxStock} buah.`);
+                    if (quantity > maxAllowed) {
+                        this.value = maxAllowed;
+                        quantity = maxAllowed;
                     }
                     
-                    // Panggil debounce, validasi limit utama ada di PHP/Server
-                    debouncedUpdateCart(productId, quantity, true);
+                    debouncedUpdateCart(productId, quantity);
                 });
             });
         });
