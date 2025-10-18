@@ -22,7 +22,6 @@ if ($category_id) {
     }
     $stmt->close();
 
-    // ✅ Ambil produk dengan info terjual untuk kategori ini
     $products = [];
     $stmt_prod = $conn->prepare("
         SELECT p.*, SUM(oi.quantity) as total_sold
@@ -43,7 +42,6 @@ if ($category_id) {
 
 } else {
     // Tampilan Semua Kategori
-    // ✅ Ambil semua kategori dengan info terjual
     $categories = [];
     $result_cat = $conn->query("
         SELECT c.*
@@ -77,7 +75,8 @@ if ($category_id) {
         <?php if ($category_id): ?>
             <!-- Tampilan Produk dalam Kategori -->
             <div class="flex items-center mb-8">
-                 <a href="<?= BASE_URL ?>/kategori/kategori.php" class="text-indigo-600 hover:text-indigo-800 mr-2"><i class="fas fa-arrow-left"></i> Kembali</a>
+                 <!-- PERBAIKAN: Link kembali ke Beranda (index.php) -->
+                 <a href="<?= BASE_URL ?>/" class="text-indigo-600 hover:text-indigo-800 mr-2"><i class="fas fa-arrow-left"></i> Kembali ke Beranda</a>
                  <span class="text-gray-400">/</span>
                  <h1 class="text-3xl font-bold text-gray-800 ml-2"><?= htmlspecialchars($current_category_name) ?></h1>
             </div>
@@ -85,7 +84,7 @@ if ($category_id) {
             <div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-4 sm:gap-6">
                 <?php if (!empty($products)): ?>
                     <?php foreach ($products as $product): ?>
-                        <?php product_card($product); // ✅ Gunakan card produk baru ?>
+                        <?php product_card($product); ?>
                     <?php endforeach; ?>
                 <?php else: ?>
                     <div class="col-span-full bg-white text-center p-12 rounded-lg shadow">

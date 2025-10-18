@@ -1,6 +1,30 @@
 <?php
 // File: partial/partial.php
 
+/**
+ * Fungsi baru untuk menampilkan <head> HTML, termasuk title dan favicon.
+ * @param string $page_title Judul halaman.
+ * @param mysqli $conn Koneksi database.
+ */
+function page_head($page_title, $conn) {
+    $logo_name = get_setting($conn, 'store_logo');
+    $favicon_path = BASE_URL . '/assets/images/settings/' . ($logo_name ?: 'default_logo.png');
+?>
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title><?= htmlspecialchars($page_title) ?></title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css">
+    <link rel="icon" type="image/png" href="<?= $favicon_path ?>">
+    <style>
+        body { font-family: 'Inter', sans-serif; }
+    </style>
+</head>
+<?php
+}
+
 function navbar($conn) {
     cancel_overdue_orders($conn);
 
@@ -88,10 +112,6 @@ function navbar($conn) {
     </script>";
 }
 
-
-/**
- * ✅ CARD KATEGORI DIKEMBALIKAN KE VERSI SIMPLE (TANPA GAMBAR)
- */
 function category_card($category) {
     ?>
     <a href="<?= BASE_URL ?>/kategori/kategori.php?id=<?= urlencode(encode_id($category['id'])) ?>" 
@@ -178,7 +198,8 @@ function banner_slide($conn) {
 ?>
 <style>.banner-slide{transition:opacity .5s ease-in-out;position:absolute;top:0;left:0;width:100%;height:100%;opacity:0;pointer-events:none}.banner-slide.active{opacity:1;z-index:10;pointer-events:auto}</style>
 <div class="container mx-auto px-4 mt-4 sm:mt-6">
-    <div id="banner-carousel" class="relative w-full overflow-hidden rounded-xl shadow-lg aspect-w-16 aspect-h-9 md:aspect-h-7 lg:aspect-h-6" style="height: 400px;">
+    <!-- PERUBAHAN: Menggunakan class arbitrary value 'aspect-[21/9]' untuk rasio 21:9 -->
+    <div id="banner-carousel" class="relative w-full overflow-hidden rounded-xl shadow-lg aspect-[21/9]">
         <?php foreach ($banners as $index => $banner): ?>
         <div class="banner-slide <?= $index === 0 ? 'active' : '' ?>" data-index="<?= $index ?>">
             <a href="<?= htmlspecialchars($banner['link_url'] ?: '#') ?>" class="block h-full">

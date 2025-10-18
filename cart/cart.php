@@ -63,6 +63,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['ajax'])) {
     
     // Jika lolos semua validasi, update keranjang
     if ($user_id) { 
+        // NOTE: Kode ini sekarang akan berfungsi dengan benar karena database sudah diperbaiki.
         $stmt = $conn->prepare("
             INSERT INTO cart (user_id, product_id, quantity) 
             VALUES (?, ?, ?) 

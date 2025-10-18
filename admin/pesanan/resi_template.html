@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Template Resi Final Diperbaiki</title>
+    <style>
+        /* Mengatur margin halaman PDF jadi sangat tipis (5mm) */
+        @page {
+            margin: 5mm;
+        }
+        body {
+            font-family: helvetica, sans-serif;
+            font-size: 12pt; /* Ukuran font dasar diperbesar */
+            margin: 0;
+            padding: 0;
+        }
+        /* Styling untuk semua font yang lebih besar */
+        .font-large {
+            font-size: 14pt; /* Ukuran font utama diperbesar */
+        }
+        .font-medium {
+            font-size: 12pt;
+        }
+        .font-small {
+            font-size: 10pt; /* Ukuran font kecil diperbesar */
+        }
+        /* Styling untuk header produk */
+        .product-header th {
+            padding: 8px;
+            font-size: 12pt; /* Diperbesar */
+        }
+    </style>
+</head>
+<body>
+    <table border="0" cellpadding="10" cellspacing="0" style="width: 100%; border: 2px solid #000; page-break-inside: avoid;">
+        
+        <!-- ====================================================== -->
+        <!-- BAGIAN ATAS: Informasi Pengirim & Penerima -->
+        <!-- ====================================================== -->
+        <tr valign="top">
+            <td>
+                <!-- Tabel Info Pengirim -->
+                <table border="0" cellpadding="0" cellspacing="0" style="width: 100%; border-bottom: 2px solid #000;">
+                    <tr>
+                        <td style="padding-bottom: 10px;" class="font-large">
+                            <strong>Pengirim :</strong> {{NAMA_PENGIRIM}} ({{HP_PENGIRIM}})
+                        </td>
+                    </tr>
+                </table>
+                <!-- Tabel Info Penerima -->
+                <table border="0" cellpadding="0" cellspacing="0" style="width: 100%; border-bottom: 2px solid #000;">
+                     <tr>
+                        <td style="padding-top: 10px; padding-bottom: 10px;">
+                            <table border="0" cellpadding="1" cellspacing="0" style="width: 100%;">
+                                <tr>
+                                    <td style="width: 85px; vertical-align: top;" class="font-large"><strong>Penerima</strong></td>
+                                    <td style="width: 10px; vertical-align: top;" class="font-large">:</td>
+                                    <td style="font-weight: bold; vertical-align: top;" class="font-large">{{PENERIMA_NAMA}}</td>
+                                </tr>
+                                <tr>
+                                    <td style="vertical-align: top;" class="font-large"><strong>No. Hp</strong></td>
+                                    <td style="vertical-align: top;" class="font-large">:</td>
+                                    <td style="font-weight: bold; vertical-align: top;" class="font-large">{{PENERIMA_HP}}</td>
+                                </tr>
+                                <tr>
+                                    <td style="vertical-align: top;" class="font-large"><strong>Alamat</strong></td>
+                                    <td style="vertical-align: top;" class="font-large">:</td>
+                                    <td style="vertical-align: top;" class="font-large">{{PENERIMA_ALAMAT}}</td>
+                                </tr>
+                            </table>
+                        </td>
+                    </tr>
+                </table>
+            </td>
+        </tr>
+
+        <!-- ====================================================== -->
+        <!-- SPACER ROW: Kunci untuk Jarak yang Konsisten -->
+        <!-- ====================================================== -->
+        <tr>
+            <td style="height: 20mm;">&nbsp;</td> <!-- Spacer disesuaikan agar pas dengan font besar -->
+        </tr>
+
+        <!-- ====================================================== -->
+        <!-- BAGIAN BAWAH: Informasi Produk & Footer -->
+        <!-- ====================================================== -->
+        <tr valign="bottom">
+            <td>
+                <table border="0" cellpadding="0" cellspacing="0" style="width: 100%;">
+                    <!-- Info Produk -->
+                    <tr>
+                        <td>
+                            <div style="text-align: right; padding-bottom: 5px;" class="font-medium">
+                                <strong>INV. NO. :</strong> #{{ORDER_NUMBER}}
+                            </div>
+                            <table style="width: 100%; border-collapse: collapse;">
+                                <thead>
+                                    <tr class="product-header" style="border-top: 2px solid #000; border-bottom: 2px solid #000;">
+                                        <th style="width: 10%; text-align: left;">No.</th>
+                                        <th style="width: 70%; text-align: left;">Nama Product</th>
+                                        <th style="width: 20%; text-align: center;">Qty</th>
+                                    </tr>
+                                </thead>
+                                <tbody class="font-medium">
+                                    {{PRODUK_ITEMS}}
+                                </tbody>
+                            </table>
+                        </td>
+                    </tr>
+                     <!-- Footer -->
+                    <tr>
+                        <td style="padding-top: 20px;">
+                            <table border="0" cellpadding="0" cellspacing="0" style="width: 100%;">
+                                <tr>
+                                    <td style="width: 50%;" class="font-large">
+                                        [ ] DFOD &nbsp; [ ] TUNAI
+                                    </td>
+                                    <td style="width: 50%; text-align: left;" class="font-small">
+                                        KOMPLAIN KERUSAKAN ATAU KEHILANGAN BARANG WAJIB DISERTAKAN VIDEO UNBOXING
+                                    </td>
+                                </tr>
+                            </table>
+                        </td>
+                    </tr>
+                </table>
+            </td>
+        </tr>
+    </table>
+</body>
+</html>

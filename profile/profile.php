@@ -19,7 +19,7 @@ $store_name = get_setting($conn, 'store_name') ?? 'Marketplace';
 $user_id = $_SESSION['user_id'] ?? 0;
 
 // =========================================================
-// LOGIKA UPDATE PROFIL & ALAMAT
+// LOGIKA UPDATE PROFIL, ALAMAT & SELESAIKAN PESANAN
 // =========================================================
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     // Logika Update Nama Pengguna
@@ -41,6 +41,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     
     // Logika Simpan Alamat (Tambah/Edit)
     if (isset($_POST['save_address'])) {
+        // ... (kode simpan alamat tidak diubah)
         $address_id = (int)($_POST['address_id'] ?? 0);
         $full_name = sanitize_input($_POST['full_name']);
         $phone_number = sanitize_input($_POST['phone_number']);
@@ -74,6 +75,35 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         }
         $stmt->close();
         redirect('/profile/profile.php?tab=addresses');
+    }
+    
+    // FITUR BARU: Logika untuk menyelesaikan pesanan
+    if (isset($_POST['complete_order'])) {
+        $order_id_to_complete = (int)($_POST['order_id'] ?? 0);
+
+        if ($order_id_to_complete > 0 && $user_id > 0) {
+            // Cek apakah pesanan milik user dan statusnya 'shipped'
+            $stmt = $conn->prepare("SELECT id FROM orders WHERE id = ? AND user_id = ? AND status = 'shipped'");
+            $stmt->bind_param("ii", $order_id_to_complete, $user_id);
+            $stmt->execute();
+            $result = $stmt->get_result();
+
+            if ($result->num_rows === 1) {
+                // Jika valid, update status menjadi 'completed'
+                $stmt_update = $conn->prepare("UPDATE orders SET status = 'completed' WHERE id = ?");
+                $stmt_update->bind_param("i", $order_id_to_complete);
+                if ($stmt_update->execute()) {
+                    set_flashdata('success', 'Pesanan berhasil diselesaikan. Terima kasih telah berbelanja!');
+                } else {
+                    set_flashdata('error', 'Gagal menyelesaikan pesanan.');
+                }
+                $stmt_update->close();
+            } else {
+                set_flashdata('error', 'Aksi tidak valid atau pesanan tidak dapat diselesaikan.');
+            }
+            $stmt->close();
+        }
+        redirect('/profile/profile.php?tab=orders');
     }
 }
 
@@ -198,11 +228,21 @@ $active_tab = $_GET['tab'] ?? 'orders';
                                     </div>
                                     <div class="flex items-center gap-2">
                                         <?php if ($order['status'] == 'waiting_payment'): ?>
-                                            <!-- ✅ PERBAIKAN: Menggunakan order_hash -->
                                             <a href="<?= BASE_URL ?>/checkout/upload.php?hash=<?= $order['order_hash'] ?>" class="text-sm text-white bg-green-600 hover:bg-green-700 px-3 py-1.5 rounded-md transition shadow">
                                                 Upload Bukti Bayar
                                             </a>
                                         <?php endif; ?>
+
+                                        <!-- FITUR BARU: Tombol Selesaikan Pesanan -->
+                                        <?php if ($order['status'] == 'shipped'): ?>
+                                            <form method="POST" onsubmit="return confirm('Anda yakin ingin menyelesaikan pesanan ini? Aksi ini tidak dapat dibatalkan.');">
+                                                <input type="hidden" name="order_id" value="<?= $order['id'] ?>">
+                                                <button type="submit" name="complete_order" class="text-sm text-white bg-indigo-600 hover:bg-indigo-700 px-3 py-1.5 rounded-md transition shadow">
+                                                    Selesaikan Pesanan
+                                                </button>
+                                            </form>
+                                        <?php endif; ?>
+                                        
                                         <a href="<?= BASE_URL ?>/checkout/invoice.php?hash=<?= $order['order_hash'] ?>" class="text-sm text-indigo-600 border border-indigo-200 hover:bg-indigo-50 px-3 py-1.5 rounded-md transition">
                                             Lihat Invoice
                                         </a>
