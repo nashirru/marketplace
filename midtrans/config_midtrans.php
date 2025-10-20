@@ -9,8 +9,8 @@ require_once __DIR__ . '/../vendor/autoload.php';
 // Konfigurasi API Key Midtrans Anda
 // Ganti dengan kunci asli dari dashboard Midtrans Anda
 // https://dashboard.midtrans.com/settings/api_key
-\Midtrans\Config::$serverKey = 'Mid-server-kffWildQQR-Om3k9yEVVrZhu';
-\Midtrans\Config::$clientKey = 'Mid-client-y-kgYuCB11792GFk';
+\Midtrans\Config::$serverKey = '';
+\Midtrans\Config::$clientKey = '';
 
 // Set ke true jika Anda sudah di lingkungan produksi
 \Midtrans\Config::$isProduction = false;
