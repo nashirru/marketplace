@@ -41,7 +41,8 @@ $limit_message = '';
 
 if (!is_null($product['purchase_limit']) && $product['purchase_limit'] > 0) {
     if ($user_id > 0) {
-        $already_bought = get_user_purchase_count($conn, $user_id, $product['id']);
+        // PERBAIKAN: Memanggil fungsi dengan 4 argumen
+        $already_bought = get_user_purchase_count($conn, $user_id, $product['id'], $product['stock_cycle_id']);
         $quantity_in_cart = get_quantity_in_cart($conn, $user_id, $product['id']);
         
         $remaining_limit = $product['purchase_limit'] - ($already_bought + $quantity_in_cart);
@@ -91,7 +92,6 @@ if (!is_null($product['purchase_limit']) && $product['purchase_limit'] > 0) {
 
                 <!-- Info Produk -->
                 <div>
-                    <!-- ✅ PERBAIKAN LINK KATEGORI DI SINI -->
                     <a href="<?= BASE_URL ?>/kategori/kategori.php?id=<?= urlencode(encode_id($product['category_id'])) ?>" class="text-sm text-indigo-600 font-medium hover:underline"><?= htmlspecialchars($product['category_name']) ?></a>
                     
                     <h1 class="text-2xl sm:text-3xl font-bold text-gray-800 mt-2"><?= htmlspecialchars($product['name']) ?></h1>

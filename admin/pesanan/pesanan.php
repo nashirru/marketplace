@@ -8,7 +8,9 @@ if (!defined('IS_ADMIN_PAGE')) {
 $status_filter = $_GET['status'] ?? 'semua';
 $search_query = $_GET['search'] ?? '';
 $limit = max(1, (int)($_GET['limit'] ?? 10)); // Minimal 1
-$current_page = max(1, (int)($_GET['page'] ?? 1)); // Minimal 1
+
+// PERBAIKAN: Mengganti nama parameter paginasi agar tidak bentrok dengan 'page' utama
+$current_page = max(1, (int)($_GET['p'] ?? 1)); // Menggunakan 'p' untuk paginasi
 
 $allowed_statuses = ['semua', 'waiting_payment', 'waiting_approval', 'belum_dicetak', 'processed', 'shipped', 'completed', 'cancelled'];
 if (!in_array($status_filter, $allowed_statuses)) {
@@ -193,7 +195,8 @@ function get_status_class($status) {
         <p class="text-sm text-gray-700">Menampilkan <?= $start_index ?> - <?= $end_index ?> dari <?= $total_records ?> hasil</p>
         <nav class="inline-flex rounded-md shadow-sm -space-x-px">
             <?php for ($i = 1; $i <= $total_pages; $i++): ?>
-                <a href="?page=pesanan&status=<?= $status_filter ?>&search=<?= urlencode($search_query) ?>&limit=<?= $limit ?>&page=<?= $i ?>" class="<?= $i == $current_page ? 'z-10 bg-indigo-50 border-indigo-500 text-indigo-600' : 'bg-white border-gray-300 text-gray-500 hover:bg-gray-50' ?> relative inline-flex items-center px-4 py-2 border text-sm font-medium">
+                <!-- PERBAIKAN: Menggunakan 'p' untuk parameter halaman paginasi -->
+                <a href="?page=pesanan&status=<?= $status_filter ?>&search=<?= urlencode($search_query) ?>&limit=<?= $limit ?>&p=<?= $i ?>" class="<?= $i == $current_page ? 'z-10 bg-indigo-50 border-indigo-500 text-indigo-600' : 'bg-white border-gray-300 text-gray-500 hover:bg-gray-50' ?> relative inline-flex items-center px-4 py-2 border text-sm font-medium">
                     <?= $i ?>
                 </a>
             <?php endfor; ?>

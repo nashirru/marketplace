@@ -3,6 +3,7 @@
 
 require_once '../config/config.php';
 require_once '../sistem/sistem.php';
+require_once '../partial/partial.php';
 
 // =================================================================
 // START: Logic for Handling Cart Updates (AJAX)
@@ -17,7 +18,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['ajax'])) {
 
     $product_id = (int)($_POST['product_id'] ?? 0);
     $action = (string)($_POST['action'] ?? '');
-    $user_id = $_SESSION['user_id'] ?? null;
+    $user_id = $_SESSION['user_id'] ?? 0;
 
     if ($product_id <= 0 || $action !== 'update') {
         send_json_response(['success' => false, 'message' => 'Data tidak valid.']);
@@ -26,49 +27,37 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['ajax'])) {
     $quantity = (int)($_POST['quantity'] ?? 1);
     if ($quantity < 1) $quantity = 1;
 
-    // 1. Ambil data produk (harga, stok, nama, limit)
-    $stmt_product = $conn->prepare("SELECT price, stock, name, purchase_limit FROM products WHERE id = ?");
+    $stmt_product = $conn->prepare("SELECT price, stock, name, purchase_limit, stock_cycle_id FROM products WHERE id = ?");
     $stmt_product->bind_param("i", $product_id);
     $stmt_product->execute();
-    $product_result = $stmt_product->get_result();
-    if ($product_result->num_rows === 0) {
-        send_json_response(['success' => false, 'message' => 'Produk tidak ditemukan.']);
-    }
-    $product = $product_result->fetch_assoc();
+    $product = $stmt_product->get_result()->fetch_assoc();
     $stmt_product->close();
 
-    $max_stock = (int)$product['stock'];
-    $purchase_limit = (int)$product['purchase_limit']; // 0 atau NULL = unlimited
-
-    // 2. Cek Stok
-    if ($quantity > $max_stock) {
-        send_json_response(['success' => false, 'message' => 'Stok produk hanya tersedia ' . $max_stock . ' buah.', 'newQuantity' => $max_stock, 'limitViolation' => true]);
+    if (!$product) {
+        send_json_response(['success' => false, 'message' => 'Produk tidak ditemukan.']);
     }
 
-    // 3. Cek Limit Pembelian (Hanya jika user login dan limit > 0)
-    if ($user_id && $purchase_limit > 0) {
-        $already_bought = get_user_purchase_count($conn, $user_id, $product_id);
-        
+    $max_stock = (int)$product['stock'];
+    $purchase_limit = (int)$product['purchase_limit'];
+
+    if ($quantity > $max_stock) {
+        send_json_response(['success' => false, 'message' => 'Stok produk hanya tersedia ' . $max_stock . ' buah.', 'newQuantity' => $max_stock]);
+    }
+
+    if ($user_id > 0 && $purchase_limit > 0) {
+        $already_bought = get_user_purchase_count($conn, $user_id, $product_id, $product['stock_cycle_id']);
         if (($already_bought + $quantity) > $purchase_limit) {
             $allowed_in_cart = max(0, $purchase_limit - $already_bought);
-            
             send_json_response([
                 'success' => false, 
-                'message' => 'Anda sudah membeli ' . $already_bought . ' buah. Batas pembelian Anda hanya ' . $purchase_limit . ' buah. Kuantitas maksimum di keranjang adalah ' . $allowed_in_cart . '.', 
-                'newQuantity' => $allowed_in_cart, 
-                'limitViolation' => true
+                'message' => 'Batas pembelian Anda hanya ' . $purchase_limit . ' buah. Sisa kuota di keranjang: ' . $allowed_in_cart . '.', 
+                'newQuantity' => $allowed_in_cart
             ]);
         }
     }
     
-    // Jika lolos semua validasi, update keranjang
-    if ($user_id) { 
-        // NOTE: Kode ini sekarang akan berfungsi dengan benar karena database sudah diperbaiki.
-        $stmt = $conn->prepare("
-            INSERT INTO cart (user_id, product_id, quantity) 
-            VALUES (?, ?, ?) 
-            ON DUPLICATE KEY UPDATE quantity = ?
-        ");
+    if ($user_id > 0) { 
+        $stmt = $conn->prepare("INSERT INTO cart (user_id, product_id, quantity) VALUES (?, ?, ?) ON DUPLICATE KEY UPDATE quantity = ?");
         $stmt->bind_param("iiii", $user_id, $product_id, $quantity, $quantity);
         $stmt->execute();
         $stmt->close();
@@ -78,34 +67,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['ajax'])) {
         }
     }
 
-    // Hitung ulang total
+    $cart_data_for_calc = get_cart_items_for_calculation($conn, $user_id);
     $total_price = 0;
     $total_items = 0;
-    $cart_data_for_calc = [];
-
-    if ($user_id) {
-        $stmt = $conn->prepare("SELECT c.quantity, p.price FROM cart c JOIN products p ON c.product_id = p.id WHERE c.user_id = ?");
-        $stmt->bind_param("i", $user_id);
-        $stmt->execute();
-        $result = $stmt->get_result();
-        while($row = $result->fetch_assoc()) $cart_data_for_calc[] = $row;
-        $stmt->close();
-    } else {
-        if (!empty($_SESSION['cart'])) {
-            $pids = array_keys($_SESSION['cart']);
-            if(!empty($pids)){
-                $placeholders = implode(',', array_fill(0, count($pids), '?'));
-                $stmt = $conn->prepare("SELECT id, price FROM products WHERE id IN ($placeholders)");
-                $stmt->bind_param(str_repeat('i', count($pids)), ...$pids);
-                $stmt->execute();
-                $prices = array_column($stmt->get_result()->fetch_all(MYSQLI_ASSOC), 'price', 'id');
-                $stmt->close();
-                foreach($_SESSION['cart'] as $pid => $item) {
-                    if(isset($prices[$pid])) $cart_data_for_calc[] = ['quantity' => $item['quantity'], 'price' => $prices[$pid]];
-                }
-            }
-        }
-    }
     foreach($cart_data_for_calc as $item) {
         $total_price += $item['price'] * $item['quantity'];
         $total_items += $item['quantity'];
@@ -123,10 +87,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['ajax'])) {
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && !isset($_POST['ajax'])) {
     $product_id = (int)($_POST['product_id'] ?? 0);
     $action = $_POST['action'] ?? '';
-    $user_id = $_SESSION['user_id'] ?? null;
+    $user_id = $_SESSION['user_id'] ?? 0;
 
     if ($action === 'remove' && $product_id > 0) {
-        if ($user_id) {
+        if ($user_id > 0) {
             $stmt = $conn->prepare("DELETE FROM cart WHERE user_id = ? AND product_id = ?");
             $stmt->bind_param("ii", $user_id, $product_id);
             $stmt->execute();
@@ -143,76 +107,22 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !isset($_POST['ajax'])) {
 // END: Logic Handling
 // =================================================================
 
-require_once '../partial/partial.php';
-
-// Logika untuk menampilkan data keranjang
-$user_id = $_SESSION['user_id'] ?? null;
-$cart_items = [];
+$user_id = $_SESSION['user_id'] ?? 0;
+$cart_items = get_cart_items_for_display($conn, $user_id);
 $total_price = 0;
-
-if ($user_id) {
-    $stmt = $conn->prepare("
-        SELECT 
-            c.id as cart_id, p.id as product_id, p.name, p.price, p.image, 
-            c.quantity, p.stock, p.purchase_limit, p.last_stock_reset 
-        FROM cart c 
-        JOIN products p ON c.product_id = p.id 
-        WHERE c.user_id = ?
-    ");
-    $stmt->bind_param("i", $user_id);
-    $stmt->execute();
-    $result = $stmt->get_result();
-    while ($row = $result->fetch_assoc()) {
-        $cart_items[] = $row;
-        $total_price += $row['price'] * $row['quantity'];
-    }
-    $stmt->close();
-} else {
-    if (!empty($_SESSION['cart'])) {
-        $product_ids = array_keys($_SESSION['cart']);
-        $placeholders = implode(',', array_fill(0, count($product_ids), '?'));
-        $stmt = $conn->prepare("SELECT id as product_id, name, price, image, stock, purchase_limit FROM products WHERE id IN ($placeholders)");
-        $stmt->bind_param(str_repeat('i', count($product_ids)), ...$product_ids);
-        $stmt->execute();
-        $products_data = array_column($stmt->get_result()->fetch_all(MYSQLI_ASSOC), null, 'product_id');
-        $stmt->close();
-        foreach ($_SESSION['cart'] as $product_id => $item) {
-            if (isset($products_data[$product_id])) {
-                $product = $products_data[$product_id];
-                $cart_items[] = [
-                    'cart_id'=>null, 
-                    'product_id'=>$product_id, 
-                    'name'=>$product['name'], 
-                    'price'=>$product['price'], 
-                    'image'=>$product['image'], 
-                    'quantity'=>$item['quantity'], 
-                    'stock'=>$product['stock'],
-                    'purchase_limit'=>$product['purchase_limit']
-                ];
-                $total_price += $product['price'] * $item['quantity'];
-            }
-        }
-    }
+foreach($cart_items as $item) {
+    $total_price += $item['price'] * $item['quantity'];
 }
+
 $page_title = "Keranjang Belanja";
 ?>
 
 <!DOCTYPE html>
 <html lang="id">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title><?= $page_title ?> - <?= get_setting($conn, 'store_name') ?></title>
-    <script src="https://cdn.tailwindcss.com"></script>
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css">
-    <style>
-        .quantity-input { appearance: none; -moz-appearance: textfield; }
-        .quantity-input::-webkit-outer-spin-button, .quantity-input::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
-    </style>
-</head>
+<?php page_head($page_title . ' - ' . get_setting($conn, 'store_name'), $conn); ?>
 <body class="bg-gray-100">
 
-    <?= navbar($conn) ?>
+    <?php navbar($conn) ?>
     
     <main class="container mx-auto px-4 py-8">
         <?php flash_message(); ?>
@@ -240,8 +150,9 @@ $page_title = "Keranjang Belanja";
                         <?php 
                         foreach ($cart_items as $item): 
                             $limit_text = '';
-                            if (isset($item['purchase_limit']) && (int)$item['purchase_limit'] > 0 && $user_id) {
-                                $already_bought = get_user_purchase_count($conn, $user_id, $item['product_id']);
+                            if (isset($item['purchase_limit']) && (int)$item['purchase_limit'] > 0 && $user_id > 0) {
+                                // PERBAIKAN: Kirim 4 argumen ke fungsi
+                                $already_bought = get_user_purchase_count($conn, $user_id, $item['product_id'], $item['stock_cycle_id']);
                                 $allowed_in_cart = max(0, (int)$item['purchase_limit'] - $already_bought);
                                 $limit_text = "Limit: {$item['purchase_limit']} ";
                                 if ($already_bought > 0) {
@@ -256,7 +167,7 @@ $page_title = "Keranjang Belanja";
                                 <div class="w-full md:w-2/5 flex items-center">
                                     <img src="<?= BASE_URL ?>/assets/images/produk/<?= htmlspecialchars($item['image']) ?>" alt="<?= htmlspecialchars($item['name']) ?>" class="w-20 h-20 object-cover rounded-md mr-4">
                                     <div>
-                                        <a href="<?= BASE_URL ?>/product/product.php?id=<?= $item['product_id'] ?>" class="font-semibold text-gray-800 hover:text-indigo-600"><?= htmlspecialchars($item['name']) ?></a>
+                                        <a href="<?= BASE_URL ?>/product/product.php?id=<?= encode_id($item['product_id']) ?>" class="font-semibold text-gray-800 hover:text-indigo-600"><?= htmlspecialchars($item['name']) ?></a>
                                         <p class="text-sm text-gray-500">Stok: <?= $item['stock'] ?></p>
                                         <?php if (!empty($limit_text)): ?>
                                             <p class="text-xs text-red-500 font-medium"><?= $limit_text ?></p>
@@ -296,7 +207,7 @@ $page_title = "Keranjang Belanja";
         <?php endif; ?>
     </main>
 
-    <?= footer($conn) ?>
+    <?php footer($conn) ?>
 
     <script>
         function debounce(func, delay = 400) {
@@ -335,7 +246,7 @@ $page_title = "Keranjang Belanja";
                             cartBadge.style.display = 'none';
                         }
                     }
-                    if (result.newQuantity && inputElement.value != result.newQuantity) {
+                    if (result.newQuantity !== undefined && inputElement.value != result.newQuantity) {
                         inputElement.value = result.newQuantity;
                     }
                 } else {
@@ -343,7 +254,8 @@ $page_title = "Keranjang Belanja";
                     if (result.newQuantity !== undefined && inputElement) {
                         inputElement.value = result.newQuantity;
                         if(result.newQuantity > 0) {
-                           updateCart(productId, result.newQuantity); 
+                           // Auto-correct quantity
+                           debouncedUpdateCart(productId, result.newQuantity); 
                         } else {
                            window.location.reload();
                         }

@@ -10,11 +10,6 @@ if (session_status() == PHP_SESSION_NONE) {
 // =========================================================
 define('ENCRYPTION_KEY', 'W4r0kK1t3-!@#$');
 
-/**
- * Mengenkripsi ID menjadi string yang aman untuk URL (URL-safe).
- * @param int $id ID integer.
- * @return string ID yang sudah dienkripsi dan aman untuk URL.
- */
 function encode_id($id) {
     $iv = openssl_random_pseudo_bytes(openssl_cipher_iv_length('aes-256-cbc'));
     $encrypted = openssl_encrypt($id, 'aes-256-cbc', ENCRYPTION_KEY, 0, $iv);
@@ -22,11 +17,6 @@ function encode_id($id) {
     return rtrim(strtr(base64_encode($data), '+/', '-_'), '=');
 }
 
-/**
- * Mendekripsi string URL-safe kembali menjadi ID integer.
- * @param string $data String terenkripsi dari URL.
- * @return int|false ID asli atau false jika gagal.
- */
 function decode_id($data) {
     $data = strtr($data, '-_', '+/');
     $data = base64_decode($data . str_repeat('=', (4 - strlen($data) % 4) % 4));
@@ -42,17 +32,11 @@ function decode_id($data) {
 }
 
 
-/**
- * Mengatur flash message (pesan sekali tampil).
- */
 function set_flashdata($type, $message)
 {
     $_SESSION['flashdata'] = ['type' => $type, 'message' => $message];
 }
 
-/**
- * ✅ NOTIFIKASI BARU: Desain lebih clean dengan background putih.
- */
 function flash_message()
 {
     if (isset($_SESSION['flashdata'])) {
@@ -98,9 +82,6 @@ function flash_message()
 }
 
 
-/**
- * Mengambil flash message (untuk digunakan di variabel).
- */
 function get_flashdata($type = null)
 {
     if ($type === null) {
@@ -116,9 +97,6 @@ function get_flashdata($type = null)
 }
 
 
-/**
- * Memeriksa login dan menyimpan URL tujuan.
- */
 function check_login()
 {
     if (!isset($_SESSION['user_id'])) {
@@ -128,9 +106,6 @@ function check_login()
     }
 }
 
-/**
- * Memeriksa apakah user adalah admin.
- */
 function check_admin() {
     if (!isset($_SESSION['user_id']) || $_SESSION['user_role'] !== 'admin') {
         set_flashdata('error', 'Akses dilarang. Hanya untuk Admin.');
@@ -139,9 +114,6 @@ function check_admin() {
 }
 
 
-/**
- * Redirect ke URL yang ditentukan.
- */
 function redirect($url)
 {
     if (strpos($url, 'http://') === 0 || strpos($url, 'https://') === 0) {
@@ -153,17 +125,11 @@ function redirect($url)
 }
 
 
-/**
- * Membersihkan input.
- */
 function sanitize_input($data)
 {
     return htmlspecialchars(stripslashes(trim($data)));
 }
 
-/**
- * Format angka menjadi Rupiah.
- */
 function format_rupiah($number)
 {
     if (!is_numeric($number)) return 'Rp 0';
@@ -172,9 +138,6 @@ function format_rupiah($number)
 
 
 $settings_cache = [];
-/**
- * Memuat semua pengaturan.
- */
 function load_settings($conn)
 {
     global $settings_cache;
@@ -188,9 +151,6 @@ function load_settings($conn)
     }
 }
 
-/**
- * Mengambil nilai pengaturan dari cache.
- */
 function get_setting($conn, $key)
 {
     global $settings_cache;
@@ -200,49 +160,88 @@ function get_setting($conn, $key)
     return $settings_cache[$key] ?? null;
 }
 
-/**
- * Menggabungkan keranjang session ke database setelah login.
- */
 function merge_session_cart_to_db($conn, $user_id) {
     if (isset($_SESSION['cart']) && !empty($_SESSION['cart'])) {
         foreach ($_SESSION['cart'] as $product_id => $item) {
             $quantity = $item['quantity'];
 
-            $stmt_check = $conn->prepare("SELECT quantity FROM cart WHERE user_id = ? AND product_id = ?");
-            $stmt_check->bind_param("ii", $user_id, $product_id);
-            $stmt_check->execute();
-            $result_check = $stmt_check->get_result();
-
-            if ($result_check->num_rows > 0) {
-                $existing_item = $result_check->fetch_assoc();
-                $new_quantity = $existing_item['quantity'] + $quantity;
-                
-                $stmt_update = $conn->prepare("UPDATE cart SET quantity = ? WHERE user_id = ? AND product_id = ?");
-                $stmt_update->bind_param("iii", $new_quantity, $user_id, $product_id);
-                $stmt_update->execute();
-                $stmt_update->close();
-            } else {
-                $stmt_insert = $conn->prepare("INSERT INTO cart (user_id, product_id, quantity) VALUES (?, ?, ?)");
-                $stmt_insert->bind_param("iii", $user_id, $product_id, $quantity);
-                $stmt_insert->execute();
-                $stmt_insert->close();
-            }
-            $stmt_check->close();
+            // Gunakan ON DUPLICATE KEY UPDATE untuk efisiensi
+            $stmt = $conn->prepare("
+                INSERT INTO cart (user_id, product_id, quantity) 
+                VALUES (?, ?, ?) 
+                ON DUPLICATE KEY UPDATE quantity = quantity + VALUES(quantity)
+            ");
+            $stmt->bind_param("iii", $user_id, $product_id, $quantity);
+            $stmt->execute();
+            $stmt->close();
         }
         unset($_SESSION['cart']);
     }
 }
 
-// --- FUNGSI-FUNGSI UNTUK CHECKOUT & PROFIL ---
+// --- FUNGSI-FUNGSI BARU & DIPERBAIKI ---
+
+function get_cart_items_for_display($conn, $user_id) {
+    $cart_items = [];
+    if ($user_id > 0) {
+        $stmt = $conn->prepare("SELECT c.quantity, p.id as product_id, p.name, p.price, p.image, p.stock, p.purchase_limit, p.stock_cycle_id FROM cart c JOIN products p ON c.product_id = p.id WHERE c.user_id = ?");
+        $stmt->bind_param("i", $user_id);
+    } else {
+        if (empty($_SESSION['cart'])) return [];
+        $product_ids = array_keys($_SESSION['cart']);
+        $placeholders = implode(',', array_fill(0, count($product_ids), '?'));
+        $stmt = $conn->prepare("SELECT id as product_id, name, price, image, stock, purchase_limit, stock_cycle_id FROM products WHERE id IN ($placeholders)");
+        $stmt->bind_param(str_repeat('i', count($product_ids)), ...$product_ids);
+    }
+    
+    $stmt->execute();
+    $result = $stmt->get_result();
+
+    if ($user_id > 0) {
+        while ($row = $result->fetch_assoc()) $cart_items[] = $row;
+    } else {
+        $products_data = array_column($result->fetch_all(MYSQLI_ASSOC), null, 'product_id');
+        foreach ($_SESSION['cart'] as $pid => $item) {
+            if (isset($products_data[$pid])) {
+                $cart_items[] = array_merge($products_data[$pid], ['quantity' => $item['quantity']]);
+            }
+        }
+    }
+    $stmt->close();
+    return $cart_items;
+}
+
+function get_cart_items_for_calculation($conn, $user_id) {
+    $cart_data = [];
+    if ($user_id > 0) {
+        $stmt = $conn->prepare("SELECT c.quantity, p.price FROM cart c JOIN products p ON c.product_id = p.id WHERE c.user_id = ?");
+        $stmt->bind_param("i", $user_id);
+        $stmt->execute();
+        $result = $stmt->get_result();
+        while ($row = $result->fetch_assoc()) $cart_data[] = $row;
+        $stmt->close();
+    } else {
+        if (!empty($_SESSION['cart'])) {
+            $pids = array_keys($_SESSION['cart']);
+            if (!empty($pids)) {
+                $placeholders = implode(',', array_fill(0, count($pids), '?'));
+                $stmt = $conn->prepare("SELECT id, price FROM products WHERE id IN ($placeholders)");
+                $stmt->bind_param(str_repeat('i', count($pids)), ...$pids);
+                $stmt->execute();
+                $prices = array_column($stmt->get_result()->fetch_all(MYSQLI_ASSOC), 'price', 'id');
+                $stmt->close();
+                foreach ($_SESSION['cart'] as $pid => $item) {
+                    if (isset($prices[$pid])) $cart_data[] = ['quantity' => $item['quantity'], 'price' => $prices[$pid]];
+                }
+            }
+        }
+    }
+    return $cart_data;
+}
 
 function get_cart_items($conn, $user_id) {
     $items = [];
-    $stmt = $conn->prepare("
-        SELECT p.id as product_id, p.name, p.price, p.image, c.quantity
-        FROM cart c
-        JOIN products p ON c.product_id = p.id
-        WHERE c.user_id = ?
-    ");
+    $stmt = $conn->prepare("SELECT p.id as product_id, p.name, p.price, p.image, c.quantity, p.stock_cycle_id FROM cart c JOIN products p ON c.product_id = p.id WHERE c.user_id = ?");
     $stmt->bind_param("i", $user_id);
     $stmt->execute();
     $result = $stmt->get_result();
@@ -257,9 +256,7 @@ function get_payment_methods($conn) {
     $methods = [];
     $result = $conn->query("SELECT * FROM payment_methods WHERE is_active = 1");
     if ($result) {
-        while ($row = $result->fetch_assoc()) {
-            $methods[] = $row;
-        }
+        while ($row = $result->fetch_assoc()) $methods[] = $row;
     }
     return $methods;
 }
@@ -268,27 +265,17 @@ function get_default_user_address($conn, $user_id) {
     $stmt = $conn->prepare("SELECT * FROM user_addresses WHERE user_id = ? AND is_default = 1");
     $stmt->bind_param("i", $user_id);
     $stmt->execute();
-    $result = $stmt->get_result();
-    $address = $result->fetch_assoc();
+    $address = $stmt->get_result()->fetch_assoc();
     $stmt->close();
     return $address;
 }
 
 function generate_order_number($conn) {
     $date_part = date('ymd');
-    $day_doubled = date('d') * 2;
-    
-    $today_start = date('Y-m-d 00:00:00');
-    $today_end = date('Y-m-d 23:59:59');
-    
-    $stmt = $conn->prepare("SELECT COUNT(id) as total_today FROM orders WHERE created_at BETWEEN ? AND ?");
-    $stmt->bind_param("ss", $today_start, $today_end);
+    $stmt = $conn->prepare("SELECT COUNT(id) as total_today FROM orders WHERE created_at >= CURDATE()");
     $stmt->execute();
-    $result = $stmt->get_result();
-    $row = $result->fetch_assoc();
-    $sequence = ($row['total_today'] ?? 0) + 1;
-    
-    return "WK" . $date_part . $day_doubled . $sequence;
+    $sequence = ($stmt->get_result()->fetch_assoc()['total_today'] ?? 0) + 1;
+    return "WK" . $date_part . str_pad($sequence, 4, '0', STR_PAD_LEFT);
 }
 
 
@@ -300,8 +287,7 @@ function get_first_user_address($conn, $user_id) {
     $stmt = $conn->prepare("SELECT * FROM user_addresses WHERE user_id = ? ORDER BY created_at DESC LIMIT 1");
     $stmt->bind_param("i", $user_id);
     $stmt->execute();
-    $result = $stmt->get_result();
-    $address = $result->fetch_assoc();
+    $address = $stmt->get_result()->fetch_assoc();
     $stmt->close();
     return $address;
 }
@@ -319,154 +305,107 @@ function get_user_addresses($conn, $user_id) {
     return $addresses;
 }
 
+function save_or_get_user_address($conn, $user_id, $address_data) {
+    $stmt_insert = $conn->prepare("INSERT INTO user_addresses (user_id, full_name, phone_number, province, city, subdistrict, postal_code, address_line_1, address_line_2) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)");
+    $stmt_insert->bind_param("issssssss", $user_id, $address_data['full_name'], $address_data['phone_number'], $address_data['province'], $address_data['city'], $address_data['subdistrict'], $address_data['postal_code'], $address_data['address_line_1'], $address_data['address_line_2']);
+    $stmt_insert->execute();
+    $new_id = $conn->insert_id;
+    $stmt_insert->close();
+    return $new_id;
+}
+
+function set_default_address($conn, $user_id, $address_id) {
+    $conn->query("UPDATE user_addresses SET is_default = 0 WHERE user_id = $user_id");
+    $stmt_on = $conn->prepare("UPDATE user_addresses SET is_default = 1 WHERE id = ? AND user_id = ?");
+    $stmt_on->bind_param("ii", $address_id, $user_id);
+    $stmt_on->execute();
+    $stmt_on->close();
+}
+
+
 function cancel_overdue_orders($conn) {
-    $interval = "24 HOUR";
-    $stmt_find = $conn->prepare("
-        SELECT id FROM orders 
-        WHERE status = 'waiting_payment' 
-        AND created_at < NOW() - INTERVAL $interval
-    ");
+    $stmt_find = $conn->prepare("SELECT id FROM orders WHERE status = 'waiting_payment' AND created_at < NOW() - INTERVAL 1 DAY");
     $stmt_find->execute();
     $result = $stmt_find->get_result();
-    
-    $order_ids_to_cancel = [];
-    while ($row = $result->fetch_assoc()) {
-        $order_ids_to_cancel[] = $row['id'];
-    }
-    $stmt_find->close();
-
-    if (empty($order_ids_to_cancel)) {
-        return; 
-    }
+    $order_ids = array_column($result->fetch_all(MYSQLI_ASSOC), 'id');
+    if (empty($order_ids)) return;
 
     $conn->begin_transaction();
     try {
-        $stmt_stock = $conn->prepare("
-            UPDATE products p
-            JOIN order_items oi ON p.id = oi.product_id
-            SET p.stock = p.stock + oi.quantity
-            WHERE oi.order_id = ?
-        ");
-        
+        $stmt_stock = $conn->prepare("UPDATE products p JOIN order_items oi ON p.id = oi.product_id SET p.stock = p.stock + oi.quantity WHERE oi.order_id = ?");
         $stmt_cancel = $conn->prepare("UPDATE orders SET status = 'cancelled' WHERE id = ?");
-
-        foreach ($order_ids_to_cancel as $order_id) {
+        foreach ($order_ids as $order_id) {
             $stmt_stock->bind_param("i", $order_id);
             $stmt_stock->execute();
-            
             $stmt_cancel->bind_param("i", $order_id);
             $stmt_cancel->execute();
         }
-        
-        $stmt_stock->close();
-        $stmt_cancel->close();
-        
         $conn->commit();
-
     } catch (Exception $e) {
         $conn->rollback();
-        error_log("Failed to cancel overdue orders: " . $e->getMessage());
+        error_log("Gagal membatalkan pesanan: " . $e->getMessage());
     }
 }
 
-// FUNGSI UNTUK LOGIKA LIMIT PEMBELIAN
-/**
- * Menghitung jumlah produk yang sudah pernah dibeli oleh user yang terhitung limit.
- */
-function get_user_purchase_count($conn, $user_id, $product_id) {
-    if ($user_id <= 0 || $product_id <= 0) {
-        return 0;
-    }
-
-    $stmt_reset = $conn->prepare("SELECT last_stock_reset, purchase_limit FROM products WHERE id = ?");
-    $stmt_reset->bind_param("i", $product_id);
-    $stmt_reset->execute();
-    $result_reset = $stmt_reset->get_result();
-    $product_data = $result_reset->fetch_assoc();
-    $stmt_reset->close();
-
-    if (empty($product_data) || (int)$product_data['purchase_limit'] <= 0) {
-        return 0;
-    }
-    
-    $last_reset_time = $product_data['last_stock_reset'] ?? '1970-01-01 00:00:00';
+// --- FUNGSI LOGIKA LIMIT PEMBELIAN ---
+function get_user_purchase_count($conn, $user_id, $product_id, $stock_cycle_id) {
+    if (!$user_id || !$product_id) return 0;
     
     $stmt = $conn->prepare("
-        SELECT SUM(oi.quantity) as total_bought
-        FROM order_items oi
-        JOIN orders o ON oi.order_id = o.id
-        WHERE o.user_id = ? 
-          AND oi.product_id = ? 
-          AND o.created_at >= ? 
-          AND (o.status = 'completed' OR o.status = 'shipped' OR o.status = 'processed' OR o.status = 'belum_dicetak')
+        SELECT quantity_purchased 
+        FROM user_purchase_records 
+        WHERE user_id = ? AND product_id = ? AND stock_cycle_id = ?
     ");
-    $stmt->bind_param("iis", $user_id, $product_id, $last_reset_time);
+    $stmt->bind_param("iii", $user_id, $product_id, $stock_cycle_id);
     $stmt->execute();
     $result = $stmt->get_result();
     $row = $result->fetch_assoc();
     $stmt->close();
     
-    return (int)($row['total_bought'] ?? 0);
+    return (int)($row['quantity_purchased'] ?? 0);
 }
 
-/**
- * Mendapatkan kuantitas produk yang ada di keranjang user.
- */
 function get_quantity_in_cart($conn, $user_id, $product_id) {
-    if ($user_id <= 0) return 0;
-
-    $stmt = $conn->prepare("SELECT quantity FROM cart WHERE user_id = ? AND product_id = ?");
-    $stmt->bind_param("ii", $user_id, $product_id);
-    $stmt->execute();
-    $result = $stmt->get_result();
-    $row = $result->fetch_assoc();
-    $stmt->close();
-
-    return (int)($row['quantity'] ?? 0);
+    if ($user_id > 0) {
+        $stmt = $conn->prepare("SELECT quantity FROM cart WHERE user_id = ? AND product_id = ?");
+        $stmt->bind_param("ii", $user_id, $product_id);
+        $stmt->execute();
+        $row = $stmt->get_result()->fetch_assoc();
+        $stmt->close();
+        return (int)($row['quantity'] ?? 0);
+    } else {
+        return (int)($_SESSION['cart'][$product_id]['quantity'] ?? 0);
+    }
 }
 
-/**
- * Mengambil batas pembelian produk.
- */
 function get_product_limit($conn, $product_id) {
     $stmt = $conn->prepare("SELECT purchase_limit FROM products WHERE id = ?");
     $stmt->bind_param("i", $product_id);
     $stmt->execute();
-    $result = $stmt->get_result();
-    $row = $result->fetch_assoc();
+    $row = $stmt->get_result()->fetch_assoc();
     $stmt->close();
     return ($row) ? (int)$row['purchase_limit'] : 0; 
 }
 
 
-// --- FUNGSI UNTUK ADMIN PESANAN (DIPERBAIKI) ---
+// --- FUNGSI UNTUK ADMIN ---
 
-/**
- * [FIXED] Mengambil data pesanan beserta item-itemnya dengan filter dinamis.
- * @param mysqli $conn Koneksi database.
- * @param array $options Opsi filter (status, search, limit, page).
- * @return array Hasil data pesanan dan total record.
- */
 function get_orders_with_items_by_status($conn, $options) {
     $status_filter = $options['status'] ?? 'semua';
     $search_query = $options['search'] ?? '';
     $limit = (int)($options['limit'] ?? 10);
-    $current_page = max(1, (int)($options['page'] ?? 1)); // Pastikan minimal 1
-    $offset = max(0, ($current_page - 1) * $limit); // Pastikan tidak negatif
+    $current_page = max(1, (int)($options['p'] ?? 1));
+    $offset = max(0, ($current_page - 1) * $limit);
     
-    // Validasi limit
     if ($limit <= 0) $limit = 10;
 
-    // Build WHERE conditions
     $where_conditions = [];
     $where_clause = "";
     
-    // Filter Status
     if ($status_filter !== 'semua') {
         $where_conditions[] = "o.status = '" . $conn->real_escape_string($status_filter) . "'";
     }
 
-    // Filter Pencarian
     if (!empty($search_query)) {
         $search_term = $conn->real_escape_string($search_query);
         $where_conditions[] = "(o.order_number LIKE '%{$search_term}%' OR u.name LIKE '%{$search_term}%' OR o.phone_number LIKE '%{$search_term}%')";
@@ -476,9 +415,6 @@ function get_orders_with_items_by_status($conn, $options) {
         $where_clause = " WHERE " . implode(" AND ", $where_conditions);
     }
     
-    // =======================================================
-    // 1. Hitung Total Records
-    // =======================================================
     $total_query = "SELECT COUNT(o.id) as total FROM orders o LEFT JOIN users u ON o.user_id = u.id" . $where_clause;
     $result_total = $conn->query($total_query);
     $total_records = 0;
@@ -488,9 +424,6 @@ function get_orders_with_items_by_status($conn, $options) {
         $total_records = (int)$row_total['total'];
     }
 
-    // =======================================================
-    // 2. Ambil Data Pesanan Utama (dengan limit/offset)
-    // =======================================================
     $orders = [];
     $sql_orders = "
         SELECT o.*, u.name as user_name, u.email as user_email
@@ -514,9 +447,6 @@ function get_orders_with_items_by_status($conn, $options) {
             $order_ids[] = (int)$row['id'];
         }
         
-        // =======================================================
-        // 3. Ambil Item-item untuk Pesanan yang Ditampilkan
-        // =======================================================
         if (!empty($order_ids)) {
             $order_ids_str = implode(',', $order_ids);
             
@@ -544,3 +474,144 @@ function get_orders_with_items_by_status($conn, $options) {
         'total' => $total_records
     ];
 }
+
+// --- FUNGSI-FUNGSI DARI FILE ASLI ANDA ---
+function create_notification($conn, $user_id, $message) {
+    $stmt = $conn->prepare("INSERT INTO notifications (user_id, message) VALUES (?, ?)");
+    $stmt->bind_param("is", $user_id, $message);
+    $stmt->execute();
+    $stmt->close();
+}
+
+function get_all_products($conn) {
+    $products = [];
+    $sql = "SELECT p.*, c.name as category_name 
+            FROM products p 
+            JOIN categories c ON p.category_id = c.id 
+            ORDER BY p.created_at DESC";
+    $result = $conn->query($sql);
+    if ($result->num_rows > 0) {
+        while ($row = $result->fetch_assoc()) {
+            $products[] = $row;
+        }
+    }
+    return $products;
+}
+
+function get_product_by_id($conn, $id) {
+    $product = null;
+    $stmt = $conn->prepare("SELECT p.*, c.name as category_name 
+                            FROM products p 
+                            JOIN categories c ON p.category_id = c.id 
+                            WHERE p.id = ?");
+    $stmt->bind_param("i", $id);
+    $stmt->execute();
+    $result = $stmt->get_result();
+    if ($result->num_rows == 1) {
+        $product = $result->fetch_assoc();
+    }
+    $stmt->close();
+    return $product;
+}
+
+function get_all_categories($conn) {
+    $categories = [];
+    $sql = "SELECT * FROM categories ORDER BY name ASC";
+    $result = $conn->query($sql);
+    if ($result->num_rows > 0) {
+        while ($row = $result->fetch_assoc()) {
+            $categories[] = $row;
+        }
+    }
+    return $categories;
+}
+
+function get_order_by_hash($conn, $hash) {
+    $stmt = $conn->prepare("SELECT * FROM orders WHERE order_hash = ?");
+    $stmt->bind_param("s", $hash);
+    $stmt->execute();
+    $result = $stmt->get_result();
+    $order = $result->fetch_assoc();
+    $stmt->close();
+    return $order;
+}
+
+function get_order_items_with_details($conn, $order_id) {
+    $items = [];
+    $stmt = $conn->prepare("
+        SELECT oi.quantity, oi.price, p.name, p.image 
+        FROM order_items oi 
+        JOIN products p ON oi.product_id = p.id 
+        WHERE oi.order_id = ?
+    ");
+    $stmt->bind_param("i", $order_id);
+    $stmt->execute();
+    $result = $stmt->get_result();
+    while ($row = $result->fetch_assoc()) {
+        $items[] = $row;
+    }
+    $stmt->close();
+    return $items;
+}
+
+function get_payment_method_by_id($conn, $id) {
+    $stmt = $conn->prepare("SELECT * FROM payment_methods WHERE id = ?");
+    $stmt->bind_param("i", $id);
+    $stmt->execute();
+    $result = $stmt->get_result();
+    $method = $result->fetch_assoc();
+    $stmt->close();
+    return $method;
+}
+
+function get_user_by_id($conn, $id) {
+    $stmt = $conn->prepare("SELECT id, name, email, role, created_at FROM users WHERE id = ?");
+    $stmt->bind_param("i", $id);
+    $stmt->execute();
+    $result = $stmt->get_result();
+    $user = $result->fetch_assoc();
+    $stmt->close();
+    return $user;
+}
+
+function get_all_users($conn) {
+    $users = [];
+    $result = $conn->query("SELECT id, name, email, role, created_at FROM users ORDER BY created_at DESC");
+    if ($result) {
+        while ($row = $result->fetch_assoc()) {
+            $users[] = $row;
+        }
+    }
+    return $users;
+}
+
+function get_dashboard_stats($conn) {
+    $stats = [];
+    $stats['total_revenue'] = $conn->query("SELECT SUM(total) as revenue FROM orders WHERE status = 'completed'")->fetch_assoc()['revenue'] ?? 0;
+    $stats['new_orders'] = $conn->query("SELECT COUNT(id) as count FROM orders WHERE status IN ('waiting_payment', 'waiting_approval')")->fetch_assoc()['count'] ?? 0;
+    $stats['total_customers'] = $conn->query("SELECT COUNT(id) as count FROM users WHERE role = 'user'")->fetch_assoc()['count'] ?? 0;
+    $stats['low_stock_products'] = $conn->query("SELECT COUNT(id) as count FROM products WHERE stock < 10")->fetch_assoc()['count'] ?? 0;
+    return $stats;
+}
+
+function get_latest_orders($conn, $limit = 5) {
+    $orders = [];
+    $result = $conn->query("SELECT o.id, o.order_number, o.total, o.status, u.name as user_name FROM orders o JOIN users u ON o.user_id = u.id ORDER BY o.created_at DESC LIMIT $limit");
+    if ($result) {
+        while ($row = $result->fetch_assoc()) {
+            $orders[] = $row;
+        }
+    }
+    return $orders;
+}
+
+function get_admin_status_class($status) {
+    $classes = [
+        'completed' => 'bg-green-100 text-green-800', 'shipped' => 'bg-blue-100 text-blue-800',
+        'processed' => 'bg-purple-100 text-purple-800', 'belum_dicetak' => 'bg-cyan-100 text-cyan-800',
+        'waiting_approval' => 'bg-yellow-100 text-yellow-800', 'waiting_payment' => 'bg-orange-100 text-orange-800',
+        'cancelled' => 'bg-red-100 text-red-800',
+    ];
+    return $classes[$status] ?? 'bg-gray-100 text-gray-800';
+}
+?>

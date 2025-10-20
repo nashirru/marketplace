@@ -10,10 +10,12 @@ class ComposerStaticInit1ba944b1b2880695113851e981334169
         'S' => 
         array (
             'Svg\\' => 4,
+            'SnapBi\\' => 7,
             'Sabberworm\\CSS\\' => 15,
         ),
         'M' => 
         array (
+            'Midtrans\\' => 9,
             'Masterminds\\' => 12,
         ),
         'F' => 
@@ -31,9 +33,17 @@ class ComposerStaticInit1ba944b1b2880695113851e981334169
         array (
             0 => __DIR__ . '/..' . '/dompdf/php-svg-lib/src/Svg',
         ),
+        'SnapBi\\' => 
+        array (
+            0 => __DIR__ . '/..' . '/midtrans/midtrans-php/SnapBi',
+        ),
         'Sabberworm\\CSS\\' => 
         array (
             0 => __DIR__ . '/..' . '/sabberworm/php-css-parser/src',
+        ),
+        'Midtrans\\' => 
+        array (
+            0 => __DIR__ . '/..' . '/midtrans/midtrans-php/Midtrans',
         ),
         'Masterminds\\' => 
         array (

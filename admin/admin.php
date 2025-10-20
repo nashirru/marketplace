@@ -11,7 +11,7 @@ define('UPLOAD_DIR_PRODUK', '../assets/images/produk/');
 define('UPLOAD_DIR_BANNER', '../assets/images/banner/');
 define('UPLOAD_DIR_SETTINGS', '../assets/images/settings/');
 define('UPLOAD_DIR_PAYMENT', '../assets/images/payment/');
-define('UPLOAD_DIR_KATEGORI', '../assets/images/kategori/'); // Tetap ada jika dibutuhkan di masa depan
+define('UPLOAD_DIR_KATEGORI', '../assets/images/kategori/'); 
 
 // Pastikan direktori ada
 if (!is_dir(UPLOAD_DIR_PRODUK)) mkdir(UPLOAD_DIR_PRODUK, 0777, true);
@@ -84,6 +84,7 @@ if (isset($_POST['action']) && in_array($_POST['action'], ['approve_payment', 'r
     $new_status = '';
     $success_message = '';
     $error_message = 'Gagal memperbarui pesanan.';
+    $should_restock = false;
     
     switch ($action) {
         case 'approve_payment':
@@ -93,6 +94,7 @@ if (isset($_POST['action']) && in_array($_POST['action'], ['approve_payment', 'r
         case 'reject_payment':
             $new_status = 'cancelled';
             $success_message = 'Pembayaran berhasil ditolak.';
+            $should_restock = true;
             break;
         case 'process_order':
             $new_status = 'processed';
@@ -116,13 +118,26 @@ if (isset($_POST['action']) && in_array($_POST['action'], ['approve_payment', 'r
     
     $conn->begin_transaction();
     try {
+        if ($should_restock) {
+            $stmt_restock = $conn->prepare("
+                UPDATE products p
+                JOIN order_items oi ON p.id = oi.product_id
+                SET p.stock = p.stock + oi.quantity
+                WHERE oi.order_id = ?
+            ");
+            foreach ($order_ids as $order_id) {
+                $stmt_restock->bind_param("i", $order_id);
+                $stmt_restock->execute();
+            }
+            $stmt_restock->close();
+        }
+
         $stmt = $conn->prepare("UPDATE orders SET status = ? WHERE id IN ($placeholders)");
         $stmt->bind_param("s" . $types, $new_status, ...$order_ids);
         
         if ($stmt->execute()) {
             $count = $stmt->affected_rows;
-            if (count($order_ids) === 1) {
-                $order_id = $order_ids[0];
+            foreach($order_ids as $order_id) {
                 $result = $conn->query("SELECT user_id, order_number FROM orders WHERE id = $order_id");
                 $order = $result->fetch_assoc();
                 if ($order) {
@@ -160,7 +175,6 @@ if (isset($_POST['save_product'])) {
     $purchase_limit = ($limit_type === 'limited' && $purchase_limit_input > 0) ? $purchase_limit_input : 0;
     
     $stock_changed = false;
-    $old_stock = 0;
 
     if ($product_id > 0) {
         $stmt_old_prod = $conn->prepare("SELECT stock FROM products WHERE id = ?");
@@ -169,8 +183,8 @@ if (isset($_POST['save_product'])) {
         $old_prod = $stmt_old_prod->get_result()->fetch_assoc();
         $stmt_old_prod->close();
         if ($old_prod) {
-            $old_stock = (int)$old_prod['stock'];
-            if ($new_stock > $old_stock) { 
+            // PERBAIKAN: Cek jika stok LAMA tidak sama dengan stok BARU
+            if ($new_stock != (int)$old_prod['stock']) { 
                 $stock_changed = true;
             }
         }
@@ -209,7 +223,7 @@ if (isset($_POST['save_product'])) {
         }
         
         if ($stock_changed) {
-            $sql .= ", last_stock_reset = NOW()";
+            $sql .= ", last_stock_reset = NOW(), stock_cycle_id = stock_cycle_id + 1";
         }
 
         $sql .= " WHERE id=?";
@@ -230,7 +244,7 @@ if (isset($_POST['save_product'])) {
             set_flashdata('error', 'Gambar produk wajib diisi.');
             redirect('/admin/admin.php?page=produk&action=add');
         }
-        $sql = "INSERT INTO products (name, category_id, price, stock, description, image, purchase_limit, last_stock_reset) VALUES (?, ?, ?, ?, ?, ?, ?, NOW())";
+        $sql = "INSERT INTO products (name, category_id, price, stock, description, image, purchase_limit, last_stock_reset, stock_cycle_id) VALUES (?, ?, ?, ?, ?, ?, ?, NOW(), 1)";
         $stmt = $conn->prepare($sql);
         $stmt->bind_param("sidissi", $name, $category_id, $price, $new_stock, $description, $image_name, $purchase_limit); 
         if ($stmt->execute()) {
@@ -242,6 +256,7 @@ if (isset($_POST['save_product'])) {
     }
     redirect('/admin/admin.php?page=produk');
 }
+
 
 if (isset($_POST['delete_product'])) {
     $product_id = (int)$_POST['product_id'];
@@ -267,19 +282,13 @@ if (isset($_POST['delete_product'])) {
     redirect('/admin/admin.php?page=produk');
 }
 
-// ✅ LOGIKA SIMPAN PENGATURAN TOKO
 if (isset($_POST['save_settings'])) {
-    $settings_to_update = [
-        'store_name', 'store_description', 'store_address', 'store_phone', 'store_email', 'store_facebook', 'store_tiktok'
-    ];
-
+    $settings_to_update = ['store_name', 'store_description', 'store_address', 'store_phone', 'store_email', 'store_facebook', 'store_tiktok'];
     foreach ($settings_to_update as $key) {
         if (isset($_POST[$key])) {
-            $value = sanitize_input($_POST[$key]);
-            update_or_insert_setting($conn, $key, $value);
+            update_or_insert_setting($conn, $key, sanitize_input($_POST[$key]));
         }
     }
-
     if (isset($_FILES['store_logo']) && $_FILES['store_logo']['error'] === UPLOAD_ERR_OK) {
         $new_logo_name = upload_image_file($_FILES['store_logo'], UPLOAD_DIR_SETTINGS);
         if ($new_logo_name) {
@@ -288,44 +297,26 @@ if (isset($_POST['save_settings'])) {
                 unlink(UPLOAD_DIR_SETTINGS . $old_logo);
             }
             update_or_insert_setting($conn, 'store_logo', $new_logo_name);
-        } else {
-            set_flashdata('error', 'Gagal mengupload logo baru. Pengaturan lain disimpan.');
-            redirect('/admin/admin.php?page=pengaturan_toko');
         }
     }
-
     set_flashdata('success', 'Pengaturan toko berhasil diperbarui.');
     redirect('/admin/admin.php?page=pengaturan_toko');
 }
 
 
-// ✅ LOGIKA CRUD KATEGORI (DISEDERHANAKAN)
 if (isset($_POST['save_kategori'])) {
     $id = (int)($_POST['id'] ?? 0);
     $name = sanitize_input($_POST['name']);
-    
-    if (empty($name)) {
-        set_flashdata('error', 'Nama kategori tidak boleh kosong.');
-    } else {
-        if ($id > 0) { // Update
+    if (!empty($name)) {
+        if ($id > 0) {
             $stmt = $conn->prepare("UPDATE categories SET name = ? WHERE id = ?");
             $stmt->bind_param("si", $name, $id);
-            if ($stmt->execute()) {
-                set_flashdata('success', 'Kategori berhasil diperbarui.');
-            } else {
-                set_flashdata('error', 'Gagal memperbarui kategori.');
-            }
-            $stmt->close();
-        } else { // Insert
+        } else {
             $stmt = $conn->prepare("INSERT INTO categories (name) VALUES (?)");
             $stmt->bind_param("s", $name);
-            if ($stmt->execute()) {
-                set_flashdata('success', 'Kategori baru berhasil ditambahkan.');
-            } else {
-                set_flashdata('error', 'Gagal menambahkan kategori.');
-            }
-            $stmt->close();
         }
+        $stmt->execute();
+        $stmt->close();
     }
     redirect('/admin/admin.php?page=kategori');
 }
@@ -335,142 +326,66 @@ if (isset($_POST['delete_kategori'])) {
     if ($id > 0) {
         $stmt = $conn->prepare("DELETE FROM categories WHERE id = ?");
         $stmt->bind_param("i", $id);
-        if ($stmt->execute()) {
-            set_flashdata('success', 'Kategori berhasil dihapus.');
-        } else {
-            set_flashdata('error', 'Gagal menghapus kategori. Mungkin masih ada produk terkait.');
-        }
+        $stmt->execute();
         $stmt->close();
     }
     redirect('/admin/admin.php?page=kategori');
 }
 
-
-// ✅ LOGIKA CRUD BANNER
 if (isset($_POST['save_banner'])) {
     $id = (int)($_POST['id'] ?? 0);
     $title = sanitize_input($_POST['title']);
     $link_url = sanitize_input($_POST['link_url']);
     $is_active = isset($_POST['is_active']) ? 1 : 0;
     $new_image_name = null;
-    $is_new_image_uploaded = false;
-
     if (isset($_FILES['image']) && $_FILES['image']['error'] === UPLOAD_ERR_OK) {
-        $uploaded_name = upload_image_file($_FILES['image'], UPLOAD_DIR_BANNER);
-        if ($uploaded_name) {
-            $new_image_name = $uploaded_name;
-            $is_new_image_uploaded = true;
-        } else {
-            set_flashdata('error', 'Gagal mengupload gambar banner.');
-            redirect('/admin/admin.php?page=banner');
-        }
+        $new_image_name = upload_image_file($_FILES['image'], UPLOAD_DIR_BANNER);
     }
     
-    if ($id > 0) { // Update
+    if ($id > 0) {
         $sql = "UPDATE banners SET title = ?, link_url = ?, is_active = ?";
-        $types = "ssi";
         $params = [$title, $link_url, $is_active];
-        
-        if($is_new_image_uploaded) {
-            $stmt_old = $conn->prepare("SELECT image FROM banners WHERE id = ?");
-            $stmt_old->bind_param("i", $id);
-            $stmt_old->execute();
-            if($row = $stmt_old->get_result()->fetch_assoc()){
-                if($row['image'] && file_exists(UPLOAD_DIR_BANNER . $row['image'])) {
-                    unlink(UPLOAD_DIR_BANNER . $row['image']);
-                }
-            }
-            $stmt_old->close();
-
+        if($new_image_name) {
             $sql .= ", image = ?";
-            $types .= "s";
             $params[] = $new_image_name;
         }
         $sql .= " WHERE id = ?";
-        $types .= "i";
         $params[] = $id;
-
         $stmt = $conn->prepare($sql);
-        $stmt->bind_param($types, ...$params);
-        if ($stmt->execute()) {
-            set_flashdata('success', 'Banner berhasil diperbarui.');
-        } else {
-            set_flashdata('error', 'Gagal memperbarui banner.');
-        }
-        $stmt->close();
-
-    } else { // Insert
-        if (!$is_new_image_uploaded) {
-            set_flashdata('error', 'Gambar wajib diisi untuk banner baru.');
-            redirect('/admin/admin.php?page=banner&action=add');
-        }
+        $stmt->bind_param(str_repeat('s', count($params) -1) . 'i', ...$params);
+    } else {
         $stmt = $conn->prepare("INSERT INTO banners (title, link_url, is_active, image) VALUES (?, ?, ?, ?)");
         $stmt->bind_param("ssis", $title, $link_url, $is_active, $new_image_name);
-        if ($stmt->execute()) {
-            set_flashdata('success', 'Banner baru berhasil ditambahkan.');
-        } else {
-            set_flashdata('error', 'Gagal menambahkan banner.');
-        }
-        $stmt->close();
     }
+    $stmt->execute();
     redirect('/admin/admin.php?page=banner');
 }
 
 if (isset($_POST['delete_banner'])) {
     $id = (int)($_POST['id'] ?? 0);
     if($id > 0) {
-        $stmt_old = $conn->prepare("SELECT image FROM banners WHERE id = ?");
-        $stmt_old->bind_param("i", $id);
-        $stmt_old->execute();
-        if($row = $stmt_old->get_result()->fetch_assoc()){
-            if($row['image'] && file_exists(UPLOAD_DIR_BANNER . $row['image'])) {
-                unlink(UPLOAD_DIR_BANNER . $row['image']);
-            }
-        }
-        $stmt_old->close();
-        
         $stmt = $conn->prepare("DELETE FROM banners WHERE id = ?");
         $stmt->bind_param("i", $id);
-        if ($stmt->execute()) {
-            set_flashdata('success', 'Banner berhasil dihapus.');
-        } else {
-            set_flashdata('error', 'Gagal menghapus banner.');
-        }
-        $stmt->close();
+        $stmt->execute();
     }
     redirect('/admin/admin.php?page=banner');
 }
 
-
-// ✅ LOGIKA CRUD METODE PEMBAYARAN
 if (isset($_POST['save_payment_method'])) {
     $id = (int)($_POST['id'] ?? 0);
     $name = sanitize_input($_POST['name']);
     $details = sanitize_input($_POST['details']);
     $is_active = isset($_POST['is_active']) ? 1 : 0;
     
-    if (empty($name) || empty($details)) {
-        set_flashdata('error', 'Nama dan Detail metode tidak boleh kosong.');
-    } else {
-        if ($id > 0) { // Update
+    if (!empty($name) && !empty($details)) {
+        if ($id > 0) {
             $stmt = $conn->prepare("UPDATE payment_methods SET name = ?, details = ?, is_active = ? WHERE id = ?");
             $stmt->bind_param("ssii", $name, $details, $is_active, $id);
-            if ($stmt->execute()) {
-                set_flashdata('success', 'Metode pembayaran berhasil diperbarui.');
-            } else {
-                set_flashdata('error', 'Gagal memperbarui metode.');
-            }
-            $stmt->close();
-        } else { // Insert
+        } else {
             $stmt = $conn->prepare("INSERT INTO payment_methods (name, details, is_active) VALUES (?, ?, ?)");
             $stmt->bind_param("ssi", $name, $details, $is_active);
-            if ($stmt->execute()) {
-                set_flashdata('success', 'Metode pembayaran baru berhasil ditambahkan.');
-            } else {
-                set_flashdata('error', 'Gagal menambahkan metode.');
-            }
-            $stmt->close();
         }
+        $stmt->execute();
     }
     redirect('/admin/admin.php?page=pembayaran');
 }
@@ -480,19 +395,14 @@ if (isset($_POST['delete_payment_method'])) {
     if ($id > 0) {
         $stmt = $conn->prepare("DELETE FROM payment_methods WHERE id = ?");
         $stmt->bind_param("i", $id);
-        if ($stmt->execute()) {
-            set_flashdata('success', 'Metode pembayaran berhasil dihapus.');
-        } else {
-            set_flashdata('error', 'Gagal menghapus metode.');
-        }
-        $stmt->close();
+        $stmt->execute();
     }
     redirect('/admin/admin.php?page=pembayaran');
 }
 
 
-$page = $_GET['page'] ?? 'dashboard';
-$is_settings_submenu = in_array($page, ['pengaturan_toko', 'pengaturan_user']);
+$page_name = $_GET['page'] ?? 'dashboard';
+$is_settings_submenu = in_array($page_name, ['pengaturan_toko', 'pengaturan_user']);
 ?>
 <!DOCTYPE html>
 <html lang="id">
@@ -517,22 +427,25 @@ $is_settings_submenu = in_array($page, ['pengaturan_toko', 'pengaturan_user']);
         <aside class="sidebar bg-gray-800 text-white flex flex-col">
             <div class="p-6 text-xl font-semibold border-b border-gray-700">Admin Warok Kite</div>
             <nav class="flex-grow p-4 space-y-2">
-                <a href="?page=dashboard" class="flex items-center p-3 rounded-lg <?= $page == 'dashboard' ? 'bg-indigo-600 font-bold' : 'hover:bg-gray-700' ?>">Dashboard</a>
-                <a href="?page=pesanan" class="flex items-center p-3 rounded-lg <?= $page == 'pesanan' ? 'bg-indigo-600 font-bold' : 'hover:bg-gray-700' ?>">Pesanan</a>
-                <a href="?page=produk" class="flex items-center p-3 rounded-lg <?= $page == 'produk' ? 'bg-indigo-600 font-bold' : 'hover:bg-gray-700' ?>">Produk</a>
-                <a href="?page=kategori" class="flex items-center p-3 rounded-lg <?= $page == 'kategori' ? 'bg-indigo-600 font-bold' : 'hover:bg-gray-700' ?>">Kategori</a>
-                <a href="?page=banner" class="flex items-center p-3 rounded-lg <?= $page == 'banner' ? 'bg-indigo-600 font-bold' : 'hover:bg-gray-700' ?>">Banner</a>
-                <a href="?page=pembayaran" class="flex items-center p-3 rounded-lg <?= $page == 'pembayaran' ? 'bg-indigo-600 font-bold' : 'hover:bg-gray-700' ?>">Pembayaran</a>
-                <div id="settings-menu" class="<?= $is_settings_submenu ? 'submenu-active' : 'submenu-inactive' ?>">
+                <a href="?page=dashboard" class="flex items-center p-3 rounded-lg <?= $page_name == 'dashboard' ? 'bg-indigo-600 font-bold' : 'hover:bg-gray-700' ?>">Dashboard</a>
+                <a href="?page=pesanan" class="flex items-center p-3 rounded-lg <?= $page_name == 'pesanan' ? 'bg-indigo-600 font-bold' : 'hover:bg-gray-700' ?>">Pesanan</a>
+                <a href="?page=produk" class="flex items-center p-3 rounded-lg <?= $page_name == 'produk' ? 'bg-indigo-600 font-bold' : 'hover:bg-gray-700' ?>">Produk</a>
+                <a href="?page=kategori" class="flex items-center p-3 rounded-lg <?= $page_name == 'kategori' ? 'bg-indigo-600 font-bold' : 'hover:bg-gray-700' ?>">Kategori</a>
+                <a href="?page=banner" class="flex items-center p-3 rounded-lg <?= $page_name == 'banner' ? 'bg-indigo-600 font-bold' : 'hover:bg-gray-700' ?>">Banner</a>
+                <a href="?page=pembayaran" class="flex items-center p-3 rounded-lg <?= $page_name == 'pembayaran' ? 'bg-indigo-600 font-bold' : 'hover:bg-gray-700' ?>">Pembayaran</a>
+                
+                <!-- PERBAIKAN: Mengembalikan menu Pengaturan yang hilang -->
+                <div id="settings-menu" class="submenu-inactive">
                     <button type="button" class="flex items-center justify-between w-full p-3 rounded-lg text-left <?= $is_settings_submenu ? 'bg-indigo-700 font-bold' : 'hover:bg-gray-700' ?>" onclick="toggleSettingsMenu()">
-                        Pengaturan
-                        <svg class="w-4 h-4 transition-transform duration-300 transform <?= $is_settings_submenu ? 'rotate-90' : '' ?>" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"></path></svg>
+                        <span><i class="fas fa-cog mr-2"></i> Pengaturan</span>
+                        <svg id="settings-arrow" class="w-4 h-4 transition-transform duration-300 transform" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"></path></svg>
                     </button>
-                    <div class="mt-1 ml-4 space-y-1">
-                        <a href="?page=pengaturan_toko" class="block p-2 text-sm rounded-lg <?= $page == 'pengaturan_toko' ? 'bg-indigo-500 font-semibold' : 'hover:bg-gray-600' ?>">Pengaturan Toko</a>
-                        <a href="?page=pengaturan_user" class="block p-2 text-sm rounded-lg <?= $page == 'pengaturan_user' ? 'bg-indigo-500 font-semibold' : 'hover:bg-gray-600' ?>">Pengguna</a>
+                    <div class="mt-1 ml-4 space-y-1 overflow-hidden">
+                        <a href="?page=pengaturan_toko" class="block p-2 text-sm rounded-lg <?= $page_name == 'pengaturan_toko' ? 'bg-indigo-500 font-semibold' : 'hover:bg-gray-600' ?>">Pengaturan Toko</a>
+                        <a href="?page=pengaturan_user" class="block p-2 text-sm rounded-lg <?= $page_name == 'pengaturan_user' ? 'bg-indigo-500 font-semibold' : 'hover:bg-gray-600' ?>">Pengguna</a>
                     </div>
                 </div>
+
             </nav>
             <div class="p-4 border-t border-gray-700">
                  <a href="<?= BASE_URL ?>/login/logout.php" class="block w-full text-center py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 transition">Logout</a>
@@ -549,7 +462,7 @@ $is_settings_submenu = in_array($page, ['pengaturan_toko', 'pengaturan_user']);
                         'kategori' => 'Manajemen Kategori', 'banner' => 'Manajemen Banner', 'pembayaran' => 'Metode Pembayaran',
                         'pengaturan_toko' => 'Pengaturan Toko', 'pengaturan_user' => 'Manajemen Pengguna'
                     ];
-                    echo $page_title_map[$page] ?? 'Halaman Tidak Ditemukan';
+                    echo $page_title_map[$page_name] ?? 'Halaman Tidak Ditemukan';
                 ?>
             </h1>
             <?php
@@ -559,15 +472,13 @@ $is_settings_submenu = in_array($page, ['pengaturan_toko', 'pengaturan_user']);
                     'kategori' => 'kategori/kategori.php', 'banner' => 'banner/banner.php', 'pembayaran' => 'pembayaran/pembayaran.php',
                     'pengaturan_toko' => 'pengaturan/pengaturan.php', 'pengaturan_user' => 'user/user.php',
                 ];
-                if (in_array($page, $allowed_pages)) {
-                    $include_file = $file_map[$page];
-                    if (!defined('BASE_PATH')) { define('BASE_PATH', dirname(__DIR__) . '/'); }
-                    $full_path_file = BASE_PATH . 'admin/' . $include_file;
-                    if (file_exists($full_path_file)) {
+                if (in_array($page_name, $allowed_pages)) {
+                    $include_file = $file_map[$page_name];
+                    if (file_exists($include_file)) {
                         define('IS_ADMIN_PAGE', true);
-                        include $full_path_file;
+                        include $include_file;
                     } else {
-                        echo '<div class="bg-red-100 text-red-700 p-4 rounded-lg">File tidak ditemukan: ' . htmlspecialchars($full_path_file) . '</div>';
+                        echo '<div class="bg-red-100 text-red-700 p-4 rounded-lg">File tidak ditemukan: ' . htmlspecialchars($include_file) . '</div>';
                     }
                 } else {
                      echo '<div class="bg-red-100 text-red-700 p-4 rounded-lg">Halaman tidak valid.</div>';
@@ -578,9 +489,22 @@ $is_settings_submenu = in_array($page, ['pengaturan_toko', 'pengaturan_user']);
     <script>
         function toggleSettingsMenu() {
             const menu = document.getElementById('settings-menu');
+            const arrow = document.getElementById('settings-arrow');
             menu.classList.toggle('submenu-active');
             menu.classList.toggle('submenu-inactive');
+            arrow.classList.toggle('rotate-90');
         }
+
+        // PERBAIKAN: Pastikan menu terbuka jika halaman aktif
+        document.addEventListener('DOMContentLoaded', function() {
+            const menu = document.getElementById('settings-menu');
+            const is_settings_page = <?= json_encode($is_settings_submenu) ?>;
+            if (is_settings_page) {
+                menu.classList.remove('submenu-inactive');
+                menu.classList.add('submenu-active');
+                document.getElementById('settings-arrow').classList.add('rotate-90');
+            }
+        });
     </script>
 </body>
 </html>

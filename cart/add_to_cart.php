@@ -1,5 +1,5 @@
 <?php
-// File: cart/add_to_cart.php (REVISED)
+// File: cart/add_to_cart.php
 
 require_once '../config/config.php';
 require_once '../sistem/sistem.php';
@@ -14,12 +14,11 @@ if ($product_id <= 0 || $quantity_to_add <= 0) {
     redirect($redirect_url);
 }
 
-// Ambil data produk (stok, limit, nama)
-$stmt_prod = $conn->prepare("SELECT stock, purchase_limit, name FROM products WHERE id = ?");
+// Ambil data produk (stok, limit, nama, dan cycle_id)
+$stmt_prod = $conn->prepare("SELECT stock, purchase_limit, name, stock_cycle_id FROM products WHERE id = ?");
 $stmt_prod->bind_param("i", $product_id);
 $stmt_prod->execute();
-$product_result = $stmt_prod->get_result();
-$product = $product_result->fetch_assoc();
+$product = $stmt_prod->get_result()->fetch_assoc();
 $stmt_prod->close();
 
 if (!$product) {
@@ -27,13 +26,7 @@ if (!$product) {
     redirect('/index.php');
 }
 
-// Dapatkan kuantitas yang sudah ada di keranjang
-$quantity_in_cart = 0;
-if ($user_id > 0) {
-    $quantity_in_cart = get_quantity_in_cart($conn, $user_id, $product_id);
-} else {
-    $quantity_in_cart = $_SESSION['cart'][$product_id]['quantity'] ?? 0;
-}
+$quantity_in_cart = get_quantity_in_cart($conn, $user_id, $product_id);
 
 // Cek Stok Total
 if (($quantity_in_cart + $quantity_to_add) > $product['stock']) {
@@ -42,24 +35,21 @@ if (($quantity_in_cart + $quantity_to_add) > $product['stock']) {
 }
 
 // Cek Limit Pembelian (hanya untuk user yang login)
-if ($user_id > 0 && !is_null($product['purchase_limit']) && $product['purchase_limit'] > 0) {
-    $already_bought = get_user_purchase_count($conn, $user_id, $product_id);
+if ($user_id > 0 && $product['purchase_limit'] > 0) {
+    // PERBAIKAN: Kirim 4 argumen ke fungsi
+    $already_bought = get_user_purchase_count($conn, $user_id, $product_id, $product['stock_cycle_id']);
     
-    $total_future_quantity = $already_bought + $quantity_in_cart + $quantity_to_add;
-
-    if ($total_future_quantity > $product['purchase_limit']) {
+    if (($already_bought + $quantity_in_cart + $quantity_to_add) > $product['purchase_limit']) {
         $sisa_kuota = max(0, $product['purchase_limit'] - ($already_bought + $quantity_in_cart));
         $message = "Batas pembelian untuk '" . htmlspecialchars($product['name']) . "' adalah " . $product['purchase_limit'] . " buah. ";
-        $message .= $sisa_kuota > 0 ? "Anda hanya dapat menambahkan maksimal {$sisa_kuota} buah lagi." : "Anda telah mencapai batas pembelian produk ini.";
+        $message .= $sisa_kuota > 0 ? "Anda hanya dapat menambahkan {$sisa_kuota} buah lagi." : "Anda telah mencapai batas pembelian.";
         set_flashdata('error', $message);
         redirect($redirect_url);
     }
 }
 
-// --- LOGIKA UTAMA (DIPERBAIKI & LEBIH EFISIEN) ---
+// --- LOGIKA UTAMA ---
 if ($user_id > 0) {
-    // Gunakan "INSERT ... ON DUPLICATE KEY UPDATE" untuk operasi atomik
-    // Ini lebih aman dan cepat daripada SELECT lalu UPDATE/INSERT
     $stmt = $conn->prepare("
         INSERT INTO cart (user_id, product_id, quantity) 
         VALUES (?, ?, ?) 
@@ -69,7 +59,6 @@ if ($user_id > 0) {
     $stmt->execute();
     $stmt->close();
 } else { 
-    // Pengguna belum login, simpan ke session
     if (isset($_SESSION['cart'][$product_id])) {
         $_SESSION['cart'][$product_id]['quantity'] += $quantity_to_add;
     } else {
