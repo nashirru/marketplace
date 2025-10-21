@@ -1,6 +1,6 @@
 <?php
 // File: checkout/get_snap_token.php
-// Versi Final - Logika Lanjut Bayar yang Benar
+// Updated: Untuk fitur Lanjut Bayar dengan check status
 
 error_reporting(0);
 header('Content-Type: application/json');
@@ -54,7 +54,8 @@ try {
         echo json_encode([
             'success' => true, 
             'snap_token' => $last_attempt['snap_token'],
-            'order_id' => $last_attempt['attempt_order_number'] // Kirim juga attempt_order_number
+            'order_id' => $last_attempt['attempt_order_number'],
+            'db_order_id' => $order_id
         ]);
         exit;
     }
@@ -75,18 +76,30 @@ try {
     
     $midtrans_items = [];
     foreach ($order_items as $item) {
-        $midtrans_items[] = ['id' => $item['product_id'], 'price' => (int)$item['price'], 'quantity' => (int)$item['quantity'], 'name' => $item['name']];
+        $midtrans_items[] = [
+            'id' => $item['product_id'], 
+            'price' => (int)$item['price'], 
+            'quantity' => (int)$item['quantity'], 
+            'name' => $item['name']
+        ];
     }
 
     $transaction_params = [
-        'transaction_details' => ['order_id' => $attempt_order_number, 'gross_amount' => (int)$order_data['total']],
-        'customer_details' => ['first_name' => $order_data['full_name'], 'email' => $order_data['email'], 'phone' => $order_data['phone_number']],
+        'transaction_details' => [
+            'order_id' => $attempt_order_number, 
+            'gross_amount' => (int)$order_data['total']
+        ],
+        'customer_details' => [
+            'first_name' => $order_data['full_name'], 
+            'email' => $order_data['email'], 
+            'phone' => $order_data['phone_number']
+        ],
         'item_details' => $midtrans_items
     ];
 
     $snapToken = \Midtrans\Snap::getSnapToken($transaction_params);
 
-    $stmt_attempt = $conn->prepare("INSERT INTO payment_attempts (order_id, attempt_order_number, snap_token) VALUES (?, ?, ?)");
+    $stmt_attempt = $conn->prepare("INSERT INTO payment_attempts (order_id, attempt_order_number, snap_token, status) VALUES (?, ?, ?, 'pending')");
     $stmt_attempt->bind_param("iss", $order_id, $attempt_order_number, $snapToken);
     $stmt_attempt->execute();
     $stmt_attempt->close();
@@ -95,7 +108,8 @@ try {
     echo json_encode([
         'success' => true, 
         'snap_token' => $snapToken,
-        'order_id' => $attempt_order_number
+        'order_id' => $attempt_order_number,
+        'db_order_id' => $order_id
     ]);
     exit;
 

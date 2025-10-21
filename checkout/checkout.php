@@ -1,6 +1,6 @@
 <?php
 // File: checkout/checkout.php
-// Versi final dengan logika pembayaran AJAX dan form lengkap
+// Versi dengan pengecekan status otomatis
 
 require_once '../config/config.php';
 require_once '../sistem/sistem.php';
@@ -25,7 +25,6 @@ $page_title = 'Checkout - ' . (get_setting($conn, 'store_name') ?? 'Warok Kite')
 <!DOCTYPE html>
 <html lang="id">
 <?php page_head($page_title, $conn); ?>
-<!-- Script Midtrans -->
 <script type="text/javascript"
         src="https://app.sandbox.midtrans.com/snap/snap.js"
         data-client-key="<?= htmlspecialchars(\Midtrans\Config::$clientKey); ?>"></script>
@@ -46,7 +45,6 @@ $page_title = 'Checkout - ' . (get_setting($conn, 'store_name') ?? 'Warok Kite')
         
         <form action="<?= BASE_URL ?>/checkout/checkout_process.php" method="POST" id="checkout-form">
             <div class="grid grid-cols-1 lg:grid-cols-3 gap-8">
-                <!-- Kolom Alamat Pengiriman -->
                 <div class="lg:col-span-2 bg-white p-6 rounded-lg shadow-md">
                     <h2 class="text-xl font-bold mb-4">Alamat Pengiriman</h2>
                     <?php if (!empty($addresses)): ?>
@@ -79,7 +77,6 @@ $page_title = 'Checkout - ' . (get_setting($conn, 'store_name') ?? 'Warok Kite')
                     </div>
                 </div>
 
-                <!-- Kolom Ringkasan Pesanan -->
                 <div class="bg-white p-6 rounded-lg shadow-md h-fit sticky top-8">
                     <h2 class="text-xl font-bold mb-4">Ringkasan Pesanan</h2>
                     <div class="space-y-4">
@@ -132,17 +129,14 @@ $page_title = 'Checkout - ' . (get_setting($conn, 'store_name') ?? 'Warok Kite')
                 }
             } else {
                 formFields.style.display = 'block';
-                fillForm({}); // Clear form for new address
+                fillForm({});
             }
         }
         
-        // Initial setup on page load
         if(selectAddress) {
             selectAddress.addEventListener('change', toggleFormFields);
-            // Trigger change to hide/show form based on initial selected value
             toggleFormFields();
         } else if (defaultAddrData) {
-            // If no address selection exists, fill with default address if available
             fillForm(defaultAddrData);
         }
 
@@ -173,18 +167,20 @@ $page_title = 'Checkout - ' . (get_setting($conn, 'store_name') ?? 'Warok Kite')
                 }
 
                 if (result.success && result.snap_token) {
+                    const dbOrderId = result.db_order_id;
+                    
                     window.snap.pay(result.snap_token, {
-                        onSuccess: function(res){ 
-                            window.location.href = `${profileUrl}&status=success&order_id=${res.order_id}`;
+                        onSuccess: async function(res){ 
+                            await checkPaymentStatus(dbOrderId, 'success');
                         },
-                        onPending: function(res){
-                             window.location.href = `${profileUrl}&status=pending&order_id=${res.order_id}`;
+                        onPending: async function(res){
+                            await checkPaymentStatus(dbOrderId, 'pending');
                         },
                         onError: function(res){
-                             window.location.href = `${profileUrl}&status=error&order_id=${res.order_id}&message=${encodeURIComponent(res.status_message)}`;
+                            window.location.href = `${profileUrl}&status=error&message=${encodeURIComponent('Pembayaran gagal, silakan coba lagi')}`;
                         },
-                        onClose: function(){
-                            window.location.href = `${profileUrl}&status=closed&order_id=${result.order_id}`;
+                        onClose: async function(){
+                            await checkPaymentStatus(dbOrderId, 'closed');
                         }
                     });
                 } else {
@@ -198,6 +194,36 @@ $page_title = 'Checkout - ' . (get_setting($conn, 'store_name') ?? 'Warok Kite')
                 submitButton.innerHTML = 'Lanjutkan ke Pembayaran';
             }
         });
+
+        async function checkPaymentStatus(orderId, userAction) {
+            try {
+                const checkResponse = await fetch('<?= BASE_URL ?>/checkout/check_payment_status.php', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                    body: `order_id=${orderId}`
+                });
+                
+                const statusResult = await checkResponse.json();
+                
+                if (statusResult.success) {
+                    const status = statusResult.status;
+                    
+                    if (status === 'settlement' || status === 'capture') {
+                        window.location.href = `${profileUrl}&status=success&message=${encodeURIComponent('Pembayaran berhasil! Pesanan Anda sedang diproses.')}`;
+                    } else if (status === 'pending') {
+                        window.location.href = `${profileUrl}&status=pending&message=${encodeURIComponent('Pembayaran menunggu konfirmasi. Mohon selesaikan pembayaran sebelum ' + (statusResult.expiry_time || 'batas waktu'))}`;
+                    } else if (status === 'cancel' || status === 'deny' || status === 'expire') {
+                        window.location.href = `${profileUrl}&status=cancelled&message=${encodeURIComponent('Pembayaran dibatalkan atau kedaluwarsa')}`;
+                    } else {
+                        window.location.href = `${profileUrl}&status=pending&message=${encodeURIComponent('Status pembayaran: Menunggu pembayaran')}`;
+                    }
+                } else {
+                    window.location.href = `${profileUrl}&status=pending&message=${encodeURIComponent('Mohon selesaikan pembayaran Anda')}`;
+                }
+            } catch (error) {
+                window.location.href = `${profileUrl}&status=unknown&message=${encodeURIComponent('Gagal mengecek status pembayaran')}`;
+            }
+        }
     });
     </script>
 

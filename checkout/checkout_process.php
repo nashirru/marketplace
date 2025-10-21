@@ -1,6 +1,6 @@
 <?php
 // File: checkout/checkout_process.php
-// Versi Final - Menghapus callback server-side, fokus pada client-side
+// Versi Final dengan Redirect yang Benar
 
 header('Content-Type: application/json');
 
@@ -28,7 +28,6 @@ if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
 
 $conn->begin_transaction();
 try {
-    // ... (Logika validasi dan penyimpanan alamat tidak berubah)
     $address_data = [
         'full_name'      => sanitize_input($_POST['full_name'] ?? ''),
         'phone_number'   => sanitize_input($_POST['phone_number'] ?? ''),
@@ -50,23 +49,24 @@ try {
     if ($existing_address_id > 0) {
         $user_address_id = $existing_address_id;
     } else {
-        if ($is_default) { $conn->query("UPDATE user_addresses SET is_default = 0 WHERE user_id = $user_id"); }
+        if ($is_default) { 
+            $conn->query("UPDATE user_addresses SET is_default = 0 WHERE user_id = $user_id"); 
+        }
         $stmt_addr = $conn->prepare("INSERT INTO user_addresses (user_id, full_name, phone_number, province, city, subdistrict, postal_code, address_line_1, address_line_2, is_default) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
         $stmt_addr->bind_param("issssssssi", $user_id, $address_data['full_name'], $address_data['phone_number'], $address_data['province'], $address_data['city'], $address_data['subdistrict'], $address_data['postal_code'], $address_data['address_line_1'], $address_data['address_line_2'], $is_default);
         $stmt_addr->execute();
         $user_address_id = $stmt_addr->insert_id;
         $stmt_addr->close();
     }
-    // ... (Akhir logika alamat)
-
 
     $cart_items_data = get_cart_items($conn, $user_id);
-    if (empty($cart_items_data['items'])) { throw new Exception("Keranjang Anda kosong."); }
+    if (empty($cart_items_data['items'])) { 
+        throw new Exception("Keranjang Anda kosong."); 
+    }
     $total_harga = $cart_items_data['subtotal'];
     
-    // [PERUBAHAN] Menambahkan user_id ke order_number agar unik dan bisa di-parse di webhook
     $order_number = 'WK-' . time() . '-' . $user_id;
-    $order_hash = generate_order_hash(); // Buat hash unik untuk invoice
+    $order_hash = generate_order_hash();
 
     $stmt_order = $conn->prepare("INSERT INTO orders (user_id, order_number, order_hash, total, status, user_address_id, full_name, phone_number, province, city, subdistrict, postal_code, address_line_1, address_line_2, created_at) VALUES (?, ?, ?, ?, 'waiting_payment', ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())");
     $stmt_order->bind_param("issdissssssss", $user_id, $order_number, $order_hash, $total_harga, $user_address_id, $address_data['full_name'], $address_data['phone_number'], $address_data['province'], $address_data['city'], $address_data['subdistrict'], $address_data['postal_code'], $address_data['address_line_1'], $address_data['address_line_2']);
@@ -79,7 +79,12 @@ try {
     foreach ($cart_items_data['items'] as $item) {
         $stmt_items->bind_param("iiid", $order_id, $item['product_id'], $item['quantity'], $item['price']);
         $stmt_items->execute();
-        $midtrans_items[] = ['id' => $item['product_id'], 'price' => (int)$item['price'], 'quantity' => (int)$item['quantity'], 'name' => $item['name']];
+        $midtrans_items[] = [
+            'id' => $item['product_id'], 
+            'price' => (int)$item['price'], 
+            'quantity' => (int)$item['quantity'], 
+            'name' => $item['name']
+        ];
     }
     $stmt_items->close();
     
@@ -89,19 +94,24 @@ try {
     $user_result = $stmt_user->get_result()->fetch_assoc();
     $stmt_user->close();
     
-    // ID unik untuk setiap percobaan bayar
     $attempt_order_number = $order_number . '-1';
     
     $transaction_params = [
-        'transaction_details' => ['order_id' => $attempt_order_number, 'gross_amount' => (int)$total_harga], 
-        'customer_details' => ['first_name' => $address_data['full_name'], 'email' => $user_result['email'], 'phone' => $address_data['phone_number']], 
-        'item_details' => $midtrans_items,
-        // [PERUBAHAN] Menghapus 'callbacks' karena akan ditangani oleh Javascript di halaman checkout
+        'transaction_details' => [
+            'order_id' => $attempt_order_number, 
+            'gross_amount' => (int)$total_harga
+        ], 
+        'customer_details' => [
+            'first_name' => $address_data['full_name'], 
+            'email' => $user_result['email'], 
+            'phone' => $address_data['phone_number']
+        ], 
+        'item_details' => $midtrans_items
     ];
     
     $snapToken = \Midtrans\Snap::getSnapToken($transaction_params);
     
-    $stmt_attempt = $conn->prepare("INSERT INTO payment_attempts (order_id, attempt_order_number, snap_token) VALUES (?, ?, ?)");
+    $stmt_attempt = $conn->prepare("INSERT INTO payment_attempts (order_id, attempt_order_number, snap_token, status) VALUES (?, ?, ?, 'pending')");
     $stmt_attempt->bind_param("iss", $order_id, $attempt_order_number, $snapToken);
     $stmt_attempt->execute();
     $stmt_attempt->close();
@@ -112,7 +122,8 @@ try {
     echo json_encode([
         'success' => true,
         'snap_token' => $snapToken,
-        'order_id' => $attempt_order_number // [PERUBAHAN] Kirim order_id ke Javascript
+        'order_id' => $attempt_order_number,
+        'db_order_id' => $order_id
     ]);
     exit;
 

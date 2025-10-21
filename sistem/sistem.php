@@ -560,6 +560,16 @@ function get_order_by_hash($conn, $hash) {
     return $order;
 }
 
+// [FUNGSI BARU] Ditambahkan untuk memperbaiki error fatal
+function get_order_number_by_id($conn, $order_id) {
+    $stmt = $conn->prepare("SELECT order_number FROM orders WHERE id = ?");
+    $stmt->bind_param("i", $order_id);
+    $stmt->execute();
+    $result = $stmt->get_result()->fetch_assoc();
+    $stmt->close();
+    return $result['order_number'] ?? null;
+}
+
 function get_order_items_with_details($conn, $order_id) {
     $items = [];
     // [PERBAIKAN] Menambahkan p.id as product_id ke dalam SELECT
