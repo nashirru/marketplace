@@ -4,7 +4,7 @@
 // --- Pengaturan Aplikasi ---
 // Ubah '/warok' sesuai dengan nama folder proyek Anda di localhost.
 // Jika proyek ada di root (http://localhost/), cukup ubah menjadi ''.
-define('BASE_URL', '/warok');
+define('BASE_URL', 'https://uncompiled-thriftless-semaj.ngrok-free.dev/warok');
 
 // --- Pengaturan Koneksi Database ---
 define('DB_HOST', 'localhost');

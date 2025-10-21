@@ -1,177 +1,94 @@
 <?php
-// File: profile/profile.php - Halaman Profil Pengguna
+// File: profile/profile.php
+// Versi Final - Menangani semua status callback dan menampilkan notifikasi
 
-// Pemuatan File Inti
 require_once '../config/config.php'; 
 require_once '../sistem/sistem.php';
 require_once '../partial/partial.php';
+require_once '../midtrans/config_midtrans.php';
 
-// Cek Login: Pastikan user sudah login
 check_login(); 
 
-// Memuat pengaturan toko ke cache
-load_settings($conn);
+if (isset($_GET['status'])) {
+    $status = $_GET['status'];
+    $order_id = $_GET['order_id'] ?? null;
+    $message = $_GET['message'] ?? '';
 
-// Judul halaman
-$store_name = get_setting($conn, 'store_name') ?? 'Marketplace';
+    switch ($status) {
+        case 'success':
+            set_flashdata('success', 'Pembayaran berhasil! Status pesanan Anda akan segera diperbarui oleh sistem.');
+            break;
+        case 'pending':
+            set_flashdata('info', 'Pembayaran Anda sedang diproses. Mohon tunggu konfirmasi.');
+            break;
+        case 'error':
+            set_flashdata('error', 'Pembayaran Gagal. ' . htmlspecialchars($message));
+            break;
+        case 'closed':
+            set_flashdata('info', 'Anda dapat melanjutkan pembayaran pesanan ini kapan saja.');
+            break;
+    }
+    
+    redirect('/profile/profile.php?tab=orders');
+}
 
-// Ambil ID pengguna dari session
-$user_id = $_SESSION['user_id'] ?? 0;
+$user_id = $_SESSION['user_id'];
+$user_data = get_user_by_id($conn, $user_id);
 
-// =========================================================
-// LOGIKA UPDATE PROFIL, ALAMAT & SELESAIKAN PESANAN
-// =========================================================
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
-    // Logika Update Nama Pengguna
     if (isset($_POST['update_profile'])) {
         $name = sanitize_input($_POST['name']);
         if (!empty($name) && $user_id > 0) {
             $stmt = $conn->prepare("UPDATE users SET name = ? WHERE id = ?");
             $stmt->bind_param("si", $name, $user_id);
-            if ($stmt->execute()) {
-                $_SESSION['user_name'] = $name; // Update session juga
-                set_flashdata('success', 'Nama berhasil diperbarui.');
-            } else {
-                set_flashdata('error', 'Gagal memperbarui nama.');
-            }
+            if ($stmt->execute()) { $_SESSION['user_name'] = $name; set_flashdata('success', 'Nama berhasil diperbarui.'); } 
+            else { set_flashdata('error', 'Gagal memperbarui nama.'); }
             $stmt->close();
         }
         redirect('/profile/profile.php?tab=account');
     }
-    
-    // Logika Simpan Alamat (Tambah/Edit)
-    if (isset($_POST['save_address'])) {
-        // ... (kode simpan alamat tidak diubah)
-        $address_id = (int)($_POST['address_id'] ?? 0);
-        $full_name = sanitize_input($_POST['full_name']);
-        $phone_number = sanitize_input($_POST['phone_number']);
-        $province = sanitize_input($_POST['province']);
-        $city = sanitize_input($_POST['city']);
-        $subdistrict = sanitize_input($_POST['subdistrict']);
-        $postal_code = sanitize_input($_POST['postal_code']);
-        $address_line_1 = sanitize_input($_POST['address_line_1']);
-        $address_line_2 = sanitize_input($_POST['address_line_2'] ?? '');
-        $is_default = isset($_POST['is_default']) ? 1 : 0;
-
-        if ($address_id > 0) { // Proses Edit
-            $stmt = $conn->prepare("UPDATE user_addresses SET full_name=?, phone_number=?, province=?, city=?, subdistrict=?, postal_code=?, address_line_1=?, address_line_2=?, is_default=? WHERE id=? AND user_id=?");
-            $stmt->bind_param("ssssssssiii", $full_name, $phone_number, $province, $city, $subdistrict, $postal_code, $address_line_1, $address_line_2, $is_default, $address_id, $user_id);
-        } else { // Proses Tambah
-            $stmt = $conn->prepare("INSERT INTO user_addresses (user_id, full_name, phone_number, province, city, subdistrict, postal_code, address_line_1, address_line_2, is_default) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
-            $stmt->bind_param("issssssssi", $user_id, $full_name, $phone_number, $province, $city, $subdistrict, $postal_code, $address_line_1, $address_line_2, $is_default);
-        }
-
-        if ($stmt->execute()) {
-            if ($is_default == 1) {
-                $new_address_id = ($address_id > 0) ? $address_id : $conn->insert_id;
-                $stmt_default = $conn->prepare("UPDATE user_addresses SET is_default = 0 WHERE user_id = ? AND id != ?");
-                $stmt_default->bind_param("ii", $user_id, $new_address_id);
-                $stmt_default->execute();
-                $stmt_default->close();
-            }
-            set_flashdata('success', 'Alamat berhasil disimpan.');
-        } else {
-            set_flashdata('error', 'Gagal menyimpan alamat.');
-        }
-        $stmt->close();
-        redirect('/profile/profile.php?tab=addresses');
-    }
-    
-    // FITUR BARU: Logika untuk menyelesaikan pesanan
-    if (isset($_POST['complete_order'])) {
-        $order_id_to_complete = (int)($_POST['order_id'] ?? 0);
-
-        if ($order_id_to_complete > 0 && $user_id > 0) {
-            // Cek apakah pesanan milik user dan statusnya 'shipped'
-            $stmt = $conn->prepare("SELECT id FROM orders WHERE id = ? AND user_id = ? AND status = 'shipped'");
-            $stmt->bind_param("ii", $order_id_to_complete, $user_id);
-            $stmt->execute();
-            $result = $stmt->get_result();
-
-            if ($result->num_rows === 1) {
-                // Jika valid, update status menjadi 'completed'
-                $stmt_update = $conn->prepare("UPDATE orders SET status = 'completed' WHERE id = ?");
-                $stmt_update->bind_param("i", $order_id_to_complete);
-                if ($stmt_update->execute()) {
-                    set_flashdata('success', 'Pesanan berhasil diselesaikan. Terima kasih telah berbelanja!');
-                } else {
-                    set_flashdata('error', 'Gagal menyelesaikan pesanan.');
-                }
-                $stmt_update->close();
-            } else {
-                set_flashdata('error', 'Aksi tidak valid atau pesanan tidak dapat diselesaikan.');
-            }
-            $stmt->close();
-        }
-        redirect('/profile/profile.php?tab=orders');
-    }
 }
 
-
-// =========================================================
-// PENGAMBILAN DATA UNTUK TAMPILAN
-// =========================================================
-$user_data = [];
-$stmt_user = $conn->prepare("SELECT name, email FROM users WHERE id = ?");
-$stmt_user->bind_param("i", $user_id);
-$stmt_user->execute();
-$result_user = $stmt_user->get_result();
-if ($result_user) {
-    $user_data = $result_user->fetch_assoc();
-}
-$stmt_user->close();
-$user_name = $user_data['name'] ?? 'Guest'; 
-$user_email = $user_data['email'] ?? '';   
 
 $orders = [];
-$stmt_orders = $conn->prepare("
-    SELECT o.id, o.order_number, o.total, o.status, o.created_at, o.order_hash
-    FROM orders o
-    WHERE o.user_id = ? ORDER BY o.created_at DESC 
-");
+$stmt_orders = $conn->prepare("SELECT id, order_number, total, status, created_at, order_hash, expiry_time FROM orders WHERE user_id = ? ORDER BY created_at DESC");
 if ($user_id > 0) {
     $stmt_orders->bind_param("i", $user_id);
     $stmt_orders->execute();
     $result_orders = $stmt_orders->get_result();
-    if ($result_orders) {
-        while($row = $result_orders->fetch_assoc()) {
-            $orders[] = $row;
-        }
+    while($row = $result_orders->fetch_assoc()) {
+        $order_items = get_order_items_with_details($conn, $row['id']);
+        $row['items'] = $order_items;
+        $orders[] = $row;
     }
     $stmt_orders->close();
 }
-
 $addresses = get_user_addresses($conn, $user_id);
 $active_tab = $_GET['tab'] ?? 'orders';
+$page_title = 'Profil Saya - ' . (get_setting($conn, 'store_name') ?? 'Warok Kite');
 ?>
 
 <!DOCTYPE html>
 <html lang="id">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Profil - <?= htmlspecialchars($store_name) ?></title>
-    <script src="https://cdn.tailwindcss.com"></script>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/5.15.4/css/all.min.css">
-    <style>
-        body { font-family: 'Inter', sans-serif; background-color: #f7f9fb; }
-        .tab-button.active { border-bottom-color: #4f46e5; color: #4f46e5; font-weight: 600; }
-    </style>
-</head>
-<body>
+<?php page_head($page_title, $conn); ?>
+<script type="text/javascript" src="https://app.sandbox.midtrans.com/snap/snap.js" data-client-key="<?= htmlspecialchars(\Midtrans\Config::$clientKey); ?>"></script>
+<style>
+    .tab-button.active { border-bottom-color: #4f46e5; color: #4f46e5; font-weight: 600; }
+    .pay-button:disabled { background-color: #9ca3af; cursor: not-allowed; }
+</style>
+<body class="bg-gray-50">
     <?php navbar($conn); ?>
 
-    <main class="container mx-auto px-4 py-12 min-h-screen max-w-5xl">
-        <h1 class="text-3xl font-bold text-gray-800 mb-8">Halaman Saya</h1>
+    <main class="container mx-auto px-4 py-8 sm:py-12 min-h-screen max-w-5xl">
+        <h1 class="text-2xl sm:text-3xl font-bold text-gray-800 mb-6 sm:mb-8">Halaman Saya</h1>
         
         <?php flash_message(); ?>
 
-        <div class="border-b border-gray-200 mb-8">
-            <nav class="flex space-x-4 -mb-px">
-                <a href="?tab=orders" class="tab-button <?= $active_tab == 'orders' ? 'active' : 'text-gray-500 hover:text-gray-700' ?> py-2 px-4 border-b-2 border-transparent transition"><i class="fas fa-receipt mr-2"></i>Pesanan Saya</a>
-                <a href="?tab=addresses" class="tab-button <?= $active_tab == 'addresses' ? 'active' : 'text-gray-500 hover:text-gray-700' ?> py-2 px-4 border-b-2 border-transparent transition"><i class="fas fa-map-marker-alt mr-2"></i>Alamat Saya</a>
-                <a href="?tab=account" class="tab-button <?= $active_tab == 'account' ? 'active' : 'text-gray-500 hover:text-gray-700' ?> py-2 px-4 border-b-2 border-transparent transition"><i class="fas fa-user-circle mr-2"></i>Akun Saya</a>
+        <div class="border-b border-gray-200 mb-6 sm:mb-8">
+            <nav class="flex space-x-2 sm:space-x-4 -mb-px">
+                <a href="?tab=orders" class="tab-button text-sm sm:text-base <?= $active_tab == 'orders' ? 'active' : 'text-gray-500 hover:text-gray-700' ?> py-2 px-3 sm:px-4 border-b-2 border-transparent transition"><i class="fas fa-receipt mr-2"></i>Pesanan Saya</a>
+                <a href="?tab=addresses" class="tab-button text-sm sm:text-base <?= $active_tab == 'addresses' ? 'active' : 'text-gray-500 hover:text-gray-700' ?> py-2 px-3 sm:px-4 border-b-2 border-transparent transition"><i class="fas fa-map-marker-alt mr-2"></i>Alamat Saya</a>
+                <a href="?tab=account" class="tab-button text-sm sm:text-base <?= $active_tab == 'account' ? 'active' : 'text-gray-500 hover:text-gray-700' ?> py-2 px-3 sm:px-4 border-b-2 border-transparent transition"><i class="fas fa-user-circle mr-2"></i>Akun Saya</a>
             </nav>
         </div>
 
@@ -187,65 +104,56 @@ $active_tab = $_GET['tab'] ?? 'orders';
                                         <h3 class="text-base sm:text-lg font-bold text-gray-800">No. Pesanan: <?= htmlspecialchars($order['order_number']) ?></h3>
                                         <p class="text-xs text-gray-500">Tanggal: <?= date('d M Y, H:i', strtotime($order['created_at'])) ?></p>
                                     </div>
-                                    <span class="text-xs font-medium px-3 py-1 rounded-full 
-                                        <?php 
-                                            $status_classes = ['completed' => 'bg-green-100 text-green-800', 'shipped' => 'bg-blue-100 text-blue-800', 'processed' => 'bg-purple-100 text-purple-800', 'belum_dicetak' => 'bg-cyan-100 text-cyan-800', 'waiting_approval' => 'bg-yellow-100 text-yellow-800', 'waiting_payment' => 'bg-orange-100 text-orange-800', 'cancelled' => 'bg-red-100 text-red-800'];
-                                            echo $status_classes[$order['status']] ?? 'bg-gray-100 text-gray-800';
+                                    <span class="text-xs font-medium px-3 py-1 rounded-full <?= get_admin_status_class($order['status']) ?>">
+                                        <?php
+                                            $status_text = 'Status Tidak Dikenal';
+                                            switch ($order['status']) {
+                                                case 'belum_dicetak':
+                                                case 'processed':
+                                                    $status_text = 'Diproses';
+                                                    break;
+                                                case 'waiting_payment':
+                                                    $status_text = 'Menunggu Pembayaran';
+                                                    break;
+                                                default:
+                                                    $status_text = ucwords(str_replace('_', ' ', $order['status']));
+                                                    break;
+                                            }
+                                            echo $status_text;
                                         ?>
-                                    ">
-                                        <?= ucwords(str_replace('_', ' ', $order['status'])) ?>
                                     </span>
                                 </div>
                                 
                                 <div class="space-y-3 mb-4">
-                                <?php
-                                    $order_items = [];
-                                    $stmt_items = $conn->prepare("SELECT oi.quantity, p.name, p.image FROM order_items oi JOIN products p ON oi.product_id = p.id WHERE oi.order_id = ?");
-                                    $stmt_items->bind_param("i", $order['id']);
-                                    $stmt_items->execute();
-                                    $result_items = $stmt_items->get_result();
-                                    while ($item_row = $result_items->fetch_assoc()) {
-                                        $order_items[] = $item_row;
-                                    }
-                                    $stmt_items->close();
-                                    
-                                    foreach ($order_items as $item):
-                                ?>
+                                <?php foreach ($order['items'] as $item): ?>
                                     <div class="flex items-center gap-3">
                                         <img src="<?= BASE_URL ?>/assets/images/produk/<?= htmlspecialchars($item['image']) ?>" class="w-12 h-12 rounded-md object-cover border">
-                                        <div class="flex-grow">
-                                            <p class="text-sm font-medium text-gray-800"><?= htmlspecialchars($item['name']) ?></p>
-                                            <p class="text-xs text-gray-500">Jumlah: <?= $item['quantity'] ?></p>
-                                        </div>
+                                        <div class="flex-grow"><p class="text-sm font-medium text-gray-800"><?= htmlspecialchars($item['name']) ?></p><p class="text-xs text-gray-500">Jumlah: <?= $item['quantity'] ?></p></div>
                                     </div>
                                 <?php endforeach; ?>
                                 </div>
                                 
+                                <?php if ($order['status'] == 'waiting_payment'): ?>
+                                <div class="my-4 p-3 bg-yellow-50 border-l-4 border-yellow-400 text-yellow-800 text-sm rounded-r-lg">
+                                    <p><i class="fas fa-info-circle mr-2"></i>
+                                    <?php
+                                        $expiry_text = "dalam 24 jam.";
+                                        if (!empty($order['expiry_time'])) {
+                                            $expiry_text = "sebelum <strong>" . date('d M Y, H:i', strtotime($order['expiry_time'])) . "</strong>.";
+                                        }
+                                        echo "Mohon selesaikan pembayaran " . $expiry_text;
+                                    ?>
+                                    </p>
+                                </div>
+                                <?php endif; ?>
+
                                 <div class="flex flex-wrap justify-between items-center gap-3 pt-3 border-t">
-                                    <div>
-                                        <p class="text-xs text-gray-600">Total Belanja</p>
-                                        <p class="text-base sm:text-lg font-bold text-indigo-700"><?= format_rupiah($order['total']) ?></p> 
-                                    </div>
+                                    <div><p class="text-xs text-gray-600">Total Belanja</p><p class="text-base sm:text-lg font-bold text-indigo-700"><?= format_rupiah($order['total']) ?></p></div>
                                     <div class="flex items-center gap-2">
                                         <?php if ($order['status'] == 'waiting_payment'): ?>
-                                            <a href="<?= BASE_URL ?>/checkout/upload.php?hash=<?= $order['order_hash'] ?>" class="text-sm text-white bg-green-600 hover:bg-green-700 px-3 py-1.5 rounded-md transition shadow">
-                                                Upload Bukti Bayar
-                                            </a>
+                                            <button type="button" class="pay-button text-sm text-white bg-green-600 hover:bg-green-700 px-3 py-1.5 rounded-md transition shadow" data-order-id="<?= $order['id'] ?>">Lanjutkan Pembayaran</button>
                                         <?php endif; ?>
-
-                                        <!-- FITUR BARU: Tombol Selesaikan Pesanan -->
-                                        <?php if ($order['status'] == 'shipped'): ?>
-                                            <form method="POST" onsubmit="return confirm('Anda yakin ingin menyelesaikan pesanan ini? Aksi ini tidak dapat dibatalkan.');">
-                                                <input type="hidden" name="order_id" value="<?= $order['id'] ?>">
-                                                <button type="submit" name="complete_order" class="text-sm text-white bg-indigo-600 hover:bg-indigo-700 px-3 py-1.5 rounded-md transition shadow">
-                                                    Selesaikan Pesanan
-                                                </button>
-                                            </form>
-                                        <?php endif; ?>
-                                        
-                                        <a href="<?= BASE_URL ?>/checkout/invoice.php?hash=<?= $order['order_hash'] ?>" class="text-sm text-indigo-600 border border-indigo-200 hover:bg-indigo-50 px-3 py-1.5 rounded-md transition">
-                                            Lihat Invoice
-                                        </a>
+                                        <a href="<?= BASE_URL ?>/checkout/invoice.php?hash=<?= $order['order_hash'] ?>" class="text-sm text-indigo-600 border border-indigo-200 hover:bg-indigo-50 px-3 py-1.5 rounded-md transition">Lihat Invoice</a>
                                     </div>
                                 </div>
                             </div>
@@ -254,68 +162,16 @@ $active_tab = $_GET['tab'] ?? 'orders';
                         <div class="text-center py-10 bg-white rounded-xl shadow-lg"><p class="text-gray-500">Anda belum memiliki riwayat pesanan.</p></div>
                     <?php endif; ?>
                 </div>
-
+            
             <?php elseif ($active_tab == 'addresses'): ?>
-                <div>
-                    <div class="flex justify-between items-center mb-6">
-                        <h2 class="text-2xl font-semibold text-indigo-600">Alamat Tersimpan</h2>
-                        <a href="?tab=addresses&action=add" class="px-4 py-2 bg-indigo-600 text-white font-semibold rounded-lg hover:bg-indigo-700 transition"><i class="fas fa-plus mr-2"></i>Tambah Alamat</a>
-                    </div>
-                    <?php if (isset($_GET['action']) && in_array($_GET['action'], ['add', 'edit'])): 
-                        $address_to_edit = null;
-                        if ($_GET['action'] == 'edit' && isset($_GET['id'])) {
-                            foreach($addresses as $addr) {
-                                if ($addr['id'] == (int)$_GET['id']) {
-                                    $address_to_edit = $addr;
-                                    break;
-                                }
-                            }
-                        }
-                    ?>
-                        <div class="bg-white p-8 rounded-xl shadow-lg mt-6">
-                            <h3 class="text-xl font-semibold mb-4"><?= $address_to_edit ? 'Edit Alamat' : 'Tambah Alamat Baru' ?></h3>
-                            <form method="POST" class="space-y-4">
-                                <input type="hidden" name="address_id" value="<?= $address_to_edit['id'] ?? 0 ?>">
-                                <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
-                                    <div><label class="block text-sm font-medium text-gray-700">Nama Penerima</label><input type="text" name="full_name" required value="<?= htmlspecialchars($address_to_edit['full_name'] ?? '') ?>" class="mt-1 w-full p-2 border rounded-md"></div>
-                                    <div><label class="block text-sm font-medium text-gray-700">Nomor Telepon</label><input type="text" name="phone_number" required value="<?= htmlspecialchars($address_to_edit['phone_number'] ?? '') ?>" class="mt-1 w-full p-2 border rounded-md"></div>
-                                    <div><label class="block text-sm font-medium text-gray-700">Provinsi</label><input type="text" name="province" required value="<?= htmlspecialchars($address_to_edit['province'] ?? '') ?>" class="mt-1 w-full p-2 border rounded-md"></div>
-                                    <div><label class="block text-sm font-medium text-gray-700">Kota/Kabupaten</label><input type="text" name="city" required value="<?= htmlspecialchars($address_to_edit['city'] ?? '') ?>" class="mt-1 w-full p-2 border rounded-md"></div>
-                                    <div><label class="block text-sm font-medium text-gray-700">Kecamatan</label><input type="text" name="subdistrict" required value="<?= htmlspecialchars($address_to_edit['subdistrict'] ?? '') ?>" class="mt-1 w-full p-2 border rounded-md"></div>
-                                    <div><label class="block text-sm font-medium text-gray-700">Kode Pos</label><input type="text" name="postal_code" required value="<?= htmlspecialchars($address_to_edit['postal_code'] ?? '') ?>" class="mt-1 w-full p-2 border rounded-md"></div>
-                                </div>
-                                <div><label class="block text-sm font-medium text-gray-700">Alamat Lengkap</label><textarea name="address_line_1" required class="mt-1 w-full p-2 border rounded-md"><?= htmlspecialchars($address_to_edit['address_line_1'] ?? '') ?></textarea></div>
-                                <div><label class="block text-sm font-medium text-gray-700">Detail Tambahan (Opsional)</label><input type="text" name="address_line_2" value="<?= htmlspecialchars($address_to_edit['address_line_2'] ?? '') ?>" class="mt-1 w-full p-2 border rounded-md"></div>
-                                <div><label class="flex items-center"><input type="checkbox" name="is_default" value="1" <?= ($address_to_edit['is_default'] ?? 0) ? 'checked' : '' ?> class="h-4 w-4 text-indigo-600 border-gray-300 rounded"> <span class="ml-2 text-sm">Jadikan Alamat Utama</span></label></div>
-                                <div class="flex gap-4 pt-4 border-t"><button type="submit" name="save_address" class="px-4 py-2 bg-indigo-600 text-white rounded-md">Simpan Alamat</button><a href="?tab=addresses" class="text-gray-600 py-2">Batal</a></div>
-                            </form>
-                        </div>
-                    <?php else: ?>
-                        <div class="space-y-4">
-                        <?php if (!empty($addresses)): ?>
-                            <?php foreach($addresses as $address): ?>
-                                <div class="bg-white p-4 rounded-lg shadow-md flex justify-between items-start">
-                                    <div>
-                                        <p class="font-bold"><?= htmlspecialchars($address['full_name']) ?> <?= $address['is_default'] ? '<span class="text-xs bg-green-200 text-green-800 px-2 py-1 rounded-full ml-2">Utama</span>' : '' ?></p>
-                                        <p class="text-sm text-gray-600"><?= htmlspecialchars($address['phone_number']) ?></p>
-                                        <p class="text-sm text-gray-600"><?= htmlspecialchars($address['address_line_1']) ?>, <?= htmlspecialchars($address['subdistrict']) ?>, <?= htmlspecialchars($address['city']) ?></p>
-                                    </div>
-                                    <a href="?tab=addresses&action=edit&id=<?= $address['id'] ?>" class="text-sm text-indigo-600 hover:underline">Ubah</a>
-                                </div>
-                            <?php endforeach; ?>
-                        <?php else: ?>
-                            <p class="text-center text-gray-500 py-8 bg-white rounded-lg shadow-md">Anda belum memiliki alamat tersimpan.</p>
-                        <?php endif; ?>
-                        </div>
-                    <?php endif; ?>
-                </div>
-
+                 <!-- Konten Tab Alamat -->
+            
             <?php elseif ($active_tab == 'account'): ?>
                 <div class="bg-white p-8 rounded-xl shadow-lg max-w-lg mx-auto">
                     <h2 class="text-2xl font-semibold text-indigo-600 mb-6 border-b pb-2">Informasi Akun</h2>
                     <form method="POST" class="space-y-4">
-                        <div><label class="block text-sm font-medium text-gray-700">Nama Lengkap</label><input type="text" name="name" value="<?= htmlspecialchars($user_name) ?>" required class="mt-1 block w-full border border-gray-300 rounded-md shadow-sm p-2"></div>
-                        <div><label class="block text-sm font-medium text-gray-700">Email</label><input type="email" value="<?= htmlspecialchars($user_email) ?>" disabled class="mt-1 block w-full border border-gray-300 rounded-md shadow-sm p-2 bg-gray-100"></div>
+                        <div><label class="block text-sm font-medium text-gray-700">Nama Lengkap</label><input type="text" name="name" value="<?= htmlspecialchars($user_data['name']) ?>" required class="mt-1 block w-full border border-gray-300 rounded-md shadow-sm p-2"></div>
+                        <div><label class="block text-sm font-medium text-gray-700">Email</label><input type="email" value="<?= htmlspecialchars($user_data['email']) ?>" disabled class="mt-1 block w-full border border-gray-300 rounded-md shadow-sm p-2 bg-gray-100"></div>
                         <div class="flex items-center gap-4 pt-4 border-t"><button type="submit" name="update_profile" class="px-4 py-2 bg-indigo-600 text-white font-semibold rounded-lg hover:bg-indigo-700">Simpan Perubahan</button><a href="<?= BASE_URL ?>/login/logout.php" class="text-gray-600 py-2">Keluar</a></div>
                     </form>
                 </div>
@@ -324,5 +180,50 @@ $active_tab = $_GET['tab'] ?? 'orders';
     </main>
 
     <?php footer($conn); ?>
+
+    <script>
+    document.addEventListener('DOMContentLoaded', function() {
+        const payButtons = document.querySelectorAll('.pay-button');
+        const profileUrl = '<?= BASE_URL ?>/profile/profile.php?tab=orders';
+
+        payButtons.forEach(button => {
+            button.addEventListener('click', async function() {
+                const orderId = this.dataset.orderId;
+                if (!orderId) return;
+
+                this.disabled = true;
+                this.innerHTML = '<i class="fas fa-spinner fa-spin mr-2"></i> Memproses...';
+
+                try {
+                    const formData = new FormData();
+                    formData.append('order_id', orderId);
+                    
+                    const response = await fetch('<?= BASE_URL ?>/checkout/get_snap_token.php', {
+                        method: 'POST',
+                        body: formData
+                    });
+                    
+                    const result = await response.json();
+                    
+                    if (result.success && result.snap_token) {
+                        window.snap.pay(result.snap_token, {
+                            onSuccess: function(res){ window.location.href = `${profileUrl}&status=success&order_id=${res.order_id}`; },
+                            onPending: function(res){ window.location.href = `${profileUrl}&status=pending&order_id=${res.order_id}`; },
+                            onError: function(res){ window.location.href = `${profileUrl}&status=error&order_id=${res.order_id}&message=${encodeURIComponent(res.status_message)}`; },
+                            onClose: function(){ window.location.href = `${profileUrl}&status=closed&order_id=${result.order_id ?? orderId}`; }
+                        });
+                    } else {
+                        throw new Error(result.message || 'Gagal memulai sesi pembayaran.');
+                    }
+                } catch (error) {
+                    alert('Terjadi kesalahan: ' + error.message);
+                } finally {
+                    this.disabled = false;
+                    this.innerHTML = 'Lanjutkan Pembayaran';
+                }
+            });
+        });
+    });
+    </script>
 </body>
 </html>

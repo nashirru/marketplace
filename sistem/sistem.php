@@ -179,7 +179,30 @@ function merge_session_cart_to_db($conn, $user_id) {
     }
 }
 
-// --- FUNGSI-FUNGSI BARU & DIPERBAIKI ---
+function get_cart_items($conn, $user_id) {
+    $cart_items = get_cart_items_for_display($conn, $user_id);
+    $subtotal = 0;
+    $items_with_subtotal = [];
+
+    foreach ($cart_items as $item) {
+        $item_subtotal = $item['price'] * $item['quantity'];
+        $subtotal += $item_subtotal;
+        $item['subtotal'] = $item_subtotal;
+        $items_with_subtotal[] = $item;
+    }
+
+    $default_address = null;
+    if ($user_id > 0) {
+        $default_address = get_default_user_address($conn, $user_id);
+    }
+    
+    return [
+        'items' => $items_with_subtotal,
+        'subtotal' => $subtotal,
+        'default_address' => $default_address
+    ];
+}
+
 
 function get_cart_items_for_display($conn, $user_id) {
     $cart_items = [];
@@ -239,17 +262,15 @@ function get_cart_items_for_calculation($conn, $user_id) {
     return $cart_data;
 }
 
-function get_cart_items($conn, $user_id) {
-    $items = [];
-    $stmt = $conn->prepare("SELECT p.id as product_id, p.name, p.price, p.image, c.quantity, p.stock_cycle_id FROM cart c JOIN products p ON c.product_id = p.id WHERE c.user_id = ?");
-    $stmt->bind_param("i", $user_id);
-    $stmt->execute();
-    $result = $stmt->get_result();
-    while ($row = $result->fetch_assoc()) {
-        $items[] = $row;
+function clear_cart($conn, $user_id) {
+    if ($user_id > 0) {
+        $stmt = $conn->prepare("DELETE FROM cart WHERE user_id = ?");
+        $stmt->bind_param("i", $user_id);
+        $stmt->execute();
+        $stmt->close();
+    } else {
+        unset($_SESSION['cart']);
     }
-    $stmt->close();
-    return $items;
 }
 
 function get_payment_methods($conn) {
@@ -262,11 +283,14 @@ function get_payment_methods($conn) {
 }
 
 function get_default_user_address($conn, $user_id) {
-    $stmt = $conn->prepare("SELECT * FROM user_addresses WHERE user_id = ? AND is_default = 1");
+    $stmt = $conn->prepare("SELECT * FROM user_addresses WHERE user_id = ? AND is_default = 1 LIMIT 1");
     $stmt->bind_param("i", $user_id);
     $stmt->execute();
     $address = $stmt->get_result()->fetch_assoc();
     $stmt->close();
+    if (!$address) {
+        return get_first_user_address($conn, $user_id);
+    }
     return $address;
 }
 
@@ -538,8 +562,9 @@ function get_order_by_hash($conn, $hash) {
 
 function get_order_items_with_details($conn, $order_id) {
     $items = [];
+    // [PERBAIKAN] Menambahkan p.id as product_id ke dalam SELECT
     $stmt = $conn->prepare("
-        SELECT oi.quantity, oi.price, p.name, p.image 
+        SELECT oi.quantity, oi.price, p.name, p.image, p.id as product_id 
         FROM order_items oi 
         JOIN products p ON oi.product_id = p.id 
         WHERE oi.order_id = ?
@@ -614,4 +639,3 @@ function get_admin_status_class($status) {
     ];
     return $classes[$status] ?? 'bg-gray-100 text-gray-800';
 }
-?>

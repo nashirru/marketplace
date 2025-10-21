@@ -45,29 +45,33 @@ if (!$snapToken) {
 
     <script type="text/javascript">
       document.addEventListener("DOMContentLoaded", function() {
+        // [PERBAIKAN] Menggunakan BASE_URL dan parameter '?tab=orders'
+        const base_url = '<?= BASE_URL ?>';
+        const order_page_url = base_url + '/profile/profile.php?tab=orders';
+
         // Panggil Snap pop-up secara otomatis
         window.snap.pay('<?php echo $snapToken; ?>', {
           onSuccess: function(result){
             /* Pembayaran sukses, arahkan ke halaman daftar pesanan */
             console.log(result);
-            window.location.href = '/profile/profile.php?page=orders&status=success';
+            window.location.href = order_page_url + '&status=success';
           },
           onPending: function(result){
             /* Pembayaran pending, arahkan ke halaman daftar pesanan */
             console.log(result);
-            window.location.href = '/profile/profile.php?page=orders&status=pending';
+            window.location.href = order_page_url + '&status=pending';
           },
           onError: function(result){
             /* Pembayaran gagal, beri tahu pengguna */
             console.log(result);
             alert("Pembayaran gagal. Silakan coba lagi dari halaman pesanan Anda.");
-            window.location.href = '/profile/profile.php?page=orders';
+            window.location.href = order_page_url;
           },
           onClose: function(){
             /* Pelanggan menutup pop-up, arahkan ke daftar pesanan */
             console.log('customer closed the popup without finishing the payment');
             alert('Anda menutup jendela pembayaran. Anda dapat melanjutkan pembayaran dari halaman "Pesanan Saya".');
-            window.location.href = '/profile/profile.php?page=orders';
+            window.location.href = order_page_url;
           }
         });
       });
