@@ -159,7 +159,7 @@ if (isset($_POST['action']) && in_array($_POST['action'], ['approve_payment', 'r
     redirect($redirect_url);
 }
 
-// --- LOGIKA CRUD PRODUK ---
+// --- LOGIKA CRUD PRODUK (FIXED) ---
 if (isset($_POST['save_product'])) {
     $product_id = (int)$_POST['product_id'];
     $name = sanitize_input($_POST['name']);
@@ -174,18 +174,25 @@ if (isset($_POST['save_product'])) {
     $purchase_limit_input = (int)($_POST['purchase_limit'] ?? 0);
     $purchase_limit = ($limit_type === 'limited' && $purchase_limit_input > 0) ? $purchase_limit_input : 0;
     
-    $stock_changed = false;
+    // ============================================================
+    // KUNCI PERBAIKAN #3: CEK PERUBAHAN STOK DAN LIMIT
+    // ============================================================
+    $should_reset_cycle = false;
 
     if ($product_id > 0) {
-        $stmt_old_prod = $conn->prepare("SELECT stock FROM products WHERE id = ?");
+        $stmt_old_prod = $conn->prepare("SELECT stock, purchase_limit FROM products WHERE id = ?");
         $stmt_old_prod->bind_param("i", $product_id);
         $stmt_old_prod->execute();
         $old_prod = $stmt_old_prod->get_result()->fetch_assoc();
         $stmt_old_prod->close();
+        
         if ($old_prod) {
-            // PERBAIKAN: Cek jika stok LAMA tidak sama dengan stok BARU
-            if ($new_stock != (int)$old_prod['stock']) { 
-                $stock_changed = true;
+            $old_stock = (int)$old_prod['stock'];
+            $old_limit = (int)$old_prod['purchase_limit'];
+            
+            // Reset cycle HANYA jika stok ATAU limit berubah
+            if ($new_stock != $old_stock || $purchase_limit != $old_limit) {
+                $should_reset_cycle = true;
             }
         }
     }
@@ -202,6 +209,7 @@ if (isset($_POST['save_product'])) {
     }
 
     if ($product_id > 0) {
+        // UPDATE PRODUK
         $sql = "UPDATE products SET name=?, category_id=?, price=?, stock=?, description=?, purchase_limit=?";
         $types = "sidisi"; 
         $params = [$name, $category_id, $price, $new_stock, $description, $purchase_limit];
@@ -222,7 +230,8 @@ if (isset($_POST['save_product'])) {
             $params[] = $image_name;
         }
         
-        if ($stock_changed) {
+        // Reset cycle HANYA jika stok atau limit berubah
+        if ($should_reset_cycle) {
             $sql .= ", last_stock_reset = NOW(), stock_cycle_id = stock_cycle_id + 1";
         }
 
@@ -234,12 +243,17 @@ if (isset($_POST['save_product'])) {
         $stmt->bind_param($types, ...$params);
 
         if ($stmt->execute()) {
-            set_flashdata('success', 'Produk berhasil diperbarui.');
+            $message = 'Produk berhasil diperbarui.';
+            if ($should_reset_cycle) {
+                $message .= ' Limit pembelian telah direset karena stok/limit berubah.';
+            }
+            set_flashdata('success', $message);
         } else {
             set_flashdata('error', 'Gagal memperbarui produk: ' . $conn->error);
         }
         $stmt->close();
     } else {
+        // INSERT PRODUK BARU
         if (!$is_new_image_uploaded) {
             set_flashdata('error', 'Gambar produk wajib diisi.');
             redirect('/admin/admin.php?page=produk&action=add');
@@ -434,7 +448,6 @@ $is_settings_submenu = in_array($page_name, ['pengaturan_toko', 'pengaturan_user
                 <a href="?page=banner" class="flex items-center p-3 rounded-lg <?= $page_name == 'banner' ? 'bg-indigo-600 font-bold' : 'hover:bg-gray-700' ?>">Banner</a>
                 <a href="?page=pembayaran" class="flex items-center p-3 rounded-lg <?= $page_name == 'pembayaran' ? 'bg-indigo-600 font-bold' : 'hover:bg-gray-700' ?>">Pembayaran</a>
                 
-                <!-- PERBAIKAN: Mengembalikan menu Pengaturan yang hilang -->
                 <div id="settings-menu" class="submenu-inactive">
                     <button type="button" class="flex items-center justify-between w-full p-3 rounded-lg text-left <?= $is_settings_submenu ? 'bg-indigo-700 font-bold' : 'hover:bg-gray-700' ?>" onclick="toggleSettingsMenu()">
                         <span><i class="fas fa-cog mr-2"></i> Pengaturan</span>
@@ -495,7 +508,6 @@ $is_settings_submenu = in_array($page_name, ['pengaturan_toko', 'pengaturan_user
             arrow.classList.toggle('rotate-90');
         }
 
-        // PERBAIKAN: Pastikan menu terbuka jika halaman aktif
         document.addEventListener('DOMContentLoaded', function() {
             const menu = document.getElementById('settings-menu');
             const is_settings_page = <?= json_encode($is_settings_submenu) ?>;

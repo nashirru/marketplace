@@ -1,11 +1,11 @@
 <?php
 // File: product/product.php
+// Versi dengan Pengecekan Limit Berlapis (Termasuk Pending Order)
 
 require_once '../config/config.php';
 require_once '../sistem/sistem.php';
 require_once '../partial/partial.php';
 
-// Cek apakah ada ID produk yang dienkripsi
 if (!isset($_GET['id'])) {
     redirect("/index.php");
 }
@@ -21,14 +21,14 @@ $stmt = $conn->prepare("
     SELECT p.*, c.name AS category_name 
     FROM products p
     JOIN categories c ON p.category_id = c.id
-    WHERE p.id = ?
+    WHERE p.id = ? AND p.is_active = 1
 ");
 $stmt->bind_param("i", $product_id);
 $stmt->execute();
 $result = $stmt->get_result();
 
 if ($result->num_rows === 0) {
-    set_flashdata('error', 'Produk yang Anda cari tidak ditemukan.');
+    set_flashdata('error', 'Produk yang Anda cari tidak ditemukan atau tidak aktif.');
     redirect("/index.php");
 }
 
@@ -36,26 +36,45 @@ $product = $result->fetch_assoc();
 $stmt->close();
 
 $user_id = $_SESSION['user_id'] ?? 0;
-$max_quantity_allowed = $product['stock'];
+$max_quantity_allowed = (int)$product['stock'];
 $limit_message = '';
 
+// [PENGECEKAN BERLAPIS 1 (DIPERBARUI)] Logika Cek Kuota di Halaman Produk
 if (!is_null($product['purchase_limit']) && $product['purchase_limit'] > 0) {
     if ($user_id > 0) {
-        // PERBAIKAN: Memanggil fungsi dengan 4 argumen
+        // Ambil riwayat pembelian (sukses)
         $already_bought = get_user_purchase_count($conn, $user_id, $product['id'], $product['stock_cycle_id']);
+        
+        // [PERBAIKAN] Ambil pembelian (pending/waiting_payment)
+        $pending_bought = get_user_pending_purchase_count($conn, $user_id, $product['id'], $product['stock_cycle_id']);
+        
+        // Ambil jumlah di keranjang
         $quantity_in_cart = get_quantity_in_cart($conn, $user_id, $product['id']);
         
-        $remaining_limit = $product['purchase_limit'] - ($already_bought + $quantity_in_cart);
+        // Total kuota yang sudah terpakai/dipesan
+        $total_committed = $already_bought + $pending_bought;
         
-        if ($remaining_limit <= 0) {
-            $max_quantity_allowed = 0;
-            $limit_message = "Anda telah mencapai batas maksimal pembelian untuk produk ini.";
+        // Hitung sisa kuota yang bisa dibeli
+        $remaining_quota = max(0, (int)$product['purchase_limit'] - $total_committed);
+        
+        // Sisa yang bisa ditambahkan ke keranjang
+        $can_add_to_cart = max(0, $remaining_quota - $quantity_in_cart);
+        
+        // Batas maksimal adalah nilai terkecil antara stok dan sisa kuota yg bisa ditambah
+        $max_quantity_allowed = min((int)$product['stock'], $can_add_to_cart);
+        
+        // [PERBAIKAN] Update pesan limit
+        $limit_message = "Limit pembelian: {$product['purchase_limit']} buah. ";
+        if ($total_committed > 0) {
+            $limit_message .= "Kuota terpakai: {$total_committed} (Sudah dibeli: {$already_bought}, Menunggu bayar: {$pending_bought}). ";
         } else {
-            $max_quantity_allowed = min($product['stock'], $remaining_limit);
-            $limit_message = "Anda dapat membeli maksimal {$product['purchase_limit']} buah. Sisa kuota Anda: {$remaining_limit} buah.";
+             $limit_message .= "Anda sudah membeli 0 buah. ";
         }
+        $limit_message .= "Sisa kuota Anda: " . max(0, $remaining_quota) . " buah.";
+        
     } else {
-        $max_quantity_allowed = min($product['stock'], $product['purchase_limit']);
+        // Info untuk user yang belum login
+        $max_quantity_allowed = min((int)$product['stock'], (int)$product['purchase_limit']);
         $limit_message = "Setiap pengguna terdaftar dapat membeli maksimal {$product['purchase_limit']} buah produk ini.";
     }
 }
@@ -66,7 +85,7 @@ if (!is_null($product['purchase_limit']) && $product['purchase_limit'] > 0) {
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title><?= htmlspecialchars($product['name']) ?> - Warok Kite</title>
+    <title><?= htmlspecialchars($product['name']) ?> - <?= get_setting($conn, 'store_name') ?></title>
     <script src="https://cdn.tailwindcss.com"></script>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css">
@@ -82,15 +101,12 @@ if (!is_null($product['purchase_limit']) && $product['purchase_limit'] > 0) {
         </div>
         <div class="bg-white p-4 sm:p-8 rounded-xl shadow-lg">
             <div class="grid grid-cols-1 md:grid-cols-2 gap-6 sm:gap-8">
-                <!-- Gambar Produk -->
                 <div class="flex justify-center items-center">
                     <img src="<?= BASE_URL ?>/assets/images/produk/<?= htmlspecialchars($product['image']) ?>" 
                          alt="<?= htmlspecialchars($product['name']) ?>" 
-                         class="w-full h-auto max-h-[450px] rounded-lg object-contain"
-                         onerror="this.onerror=null;this.src='https://placehold.co/600x600/E2E8F0/4A5568?text=Gambar+Produk';">
+                         class="w-full h-auto max-h-[450px] rounded-lg object-contain">
                 </div>
 
-                <!-- Info Produk -->
                 <div>
                     <a href="<?= BASE_URL ?>/kategori/kategori.php?id=<?= urlencode(encode_id($product['category_id'])) ?>" class="text-sm text-indigo-600 font-medium hover:underline"><?= htmlspecialchars($product['category_name']) ?></a>
                     
@@ -122,9 +138,7 @@ if (!is_null($product['purchase_limit']) && $product['purchase_limit'] > 0) {
                                        <label for="quantity" class="text-sm font-medium text-gray-700">Jumlah:</label>
                                        <input type="number" id="quantity" name="quantity" value="1" min="1" max="<?= $max_quantity_allowed ?>" class="w-20 border-gray-300 rounded-md focus:ring-indigo-500 focus:border-indigo-500">
                                    </div>
-                                   <button type="submit" class="w-full sm:w-auto flex-1 px-6 py-3 bg-indigo-600 text-white font-semibold rounded-lg hover:bg-indigo-700 transition-colors shadow-sm disabled:opacity-50"
-                                    <?= $max_quantity_allowed <= 0 ? 'disabled' : '' ?>
-                                   >
+                                   <button type="submit" class="w-full sm:w-auto flex-1 px-6 py-3 bg-indigo-600 text-white font-semibold rounded-lg hover:bg-indigo-700 transition-colors shadow-sm disabled:opacity-50">
                                       <i class="fas fa-cart-plus mr-2"></i> Tambah ke Keranjang
                                    </button>
                                 </div>
@@ -133,7 +147,13 @@ if (!is_null($product['purchase_limit']) && $product['purchase_limit'] > 0) {
                                     <p class="font-semibold">
                                         <?= ($product['stock'] <= 0) ? 'Stok Habis' : 'Kuota Pembelian Penuh' ?>
                                     </p>
-                                    <p class="text-sm">Produk ini tidak dapat ditambahkan ke keranjang saat ini.</p>
+                                    <p class="text-sm">
+                                        <?php if($product['stock'] > 0): ?>
+                                            Anda telah mencapai batas pembelian/pemesanan untuk produk ini.
+                                        <?php else: ?>
+                                            Produk ini tidak dapat ditambahkan ke keranjang saat ini.
+                                        <?php endif; ?>
+                                    </p>
                                 </div>
                             <?php endif; ?>
                         </form>

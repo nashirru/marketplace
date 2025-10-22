@@ -1,117 +1,229 @@
 <?php
 // File: midtrans/midtrans_webhook.php
-// Versi Final dengan Verifikasi Keamanan, Logging Detail, dan Notifikasi
+// VERSI FIXED dengan Logging Detail untuk Debugging
 
-// Tampilkan semua error untuk mempermudah debugging jika terjadi masalah
-ini_set('display_errors', 1);
+header('Content-Type: text/plain');
 error_reporting(E_ALL);
+ini_set('display_errors', 0);
+ini_set('log_errors', 1);
 
-require_once '../config/config.php';
-require_once '../sistem/sistem.php';
-require_once 'config_midtrans.php';
-
-// -- Persiapan Logging --
 $log_dir = __DIR__ . '/../logs';
-if (!is_dir($log_dir)) {
-    // Coba buat direktori jika belum ada, penting untuk hosting baru
-    mkdir($log_dir, 0755, true);
+if (!is_dir($log_dir)) { 
+    mkdir($log_dir, 0755, true); 
 }
+
 $log_file = $log_dir . '/midtrans.log';
 $error_log_file = $log_dir . '/midtrans_error.log';
+ini_set('error_log', $error_log_file);
 
-// Ambil notifikasi dalam bentuk JSON dari Midtrans
-$json_result = file_get_contents('php://input');
-$result = json_decode($json_result, true);
-
-// Jika tidak ada data, hentikan proses
-if (!$result) {
-    http_response_code(400); // Bad Request
-    file_put_contents($error_log_file, "WEBHOOK ERROR: Payload JSON tidak valid atau kosong diterima pada " . date('Y-m-d H:i:s') . "\n", FILE_APPEND);
-    exit();
+function write_log($message) {
+    global $log_file;
+    $timestamp = date("Y-m-d H:i:s");
+    file_put_contents($log_file, "[$timestamp] " . $message . "\n", FILE_APPEND);
 }
 
-// Catat semua notifikasi yang masuk untuk rekam jejak
-file_put_contents($log_file, "--- NOTIFIKASI BARU DITERIMA ---\n" . json_encode($result, JSON_PRETTY_PRINT) . "\n\n", FILE_APPEND);
+write_log("========================================");
+write_log("INFO: Webhook dipanggil pada " . date('Y-m-d H:i:s'));
 
-// -- Verifikasi Signature Key (Langkah Keamanan Wajib) --
-// Ini untuk memastikan notifikasi benar-benar datang dari Midtrans, bukan dari pihak lain.
-$order_id_from_payload = $result['order_id'] ?? '';
-$status_code = $result['status_code'] ?? '';
-$gross_amount = $result['gross_amount'] ?? '';
-$signature_key_from_midtrans = $result['signature_key'] ?? '';
-$server_key = \Midtrans\Config::$serverKey;
+require_once __DIR__ . '/../config/config.php';
+require_once __DIR__ . '/../midtrans/config_midtrans.php';
+require_once __DIR__ . '/../sistem/sistem.php';
 
-$my_signature_key = hash('sha512', $order_id_from_payload . $status_code . $gross_amount . $server_key);
+try {
+    $notif = new \Midtrans\Notification();
+    
+    $transaction_status = $notif->transaction_status;
+    $transaction_id = $notif->transaction_id;
+    $fraud_status = $notif->fraud_status ?? 'accept';
+    $attempt_order_number = $notif->order_id;
+    $status_code = $notif->status_code;
+    $gross_amount = $notif->gross_amount;
 
-if ($my_signature_key !== $signature_key_from_midtrans) {
-    http_response_code(403); // Forbidden
-    file_put_contents($error_log_file, "WEBHOOK SECURITY: Kunci Tanda Tangan (Signature Key) tidak valid untuk Order ID: {$order_id_from_payload}\n", FILE_APPEND);
-    exit();
-}
+    write_log("DATA: Attempt Order Number: $attempt_order_number");
+    write_log("DATA: Transaction Status: $transaction_status");
+    write_log("DATA: Transaction ID: $transaction_id");
+    write_log("DATA: Fraud Status: $fraud_status");
+    write_log("DATA: Status Code: $status_code");
+    write_log("DATA: Gross Amount: $gross_amount");
 
-// -- Proses Notifikasi --
-$attempt_order_number = $result['order_id'];
-$transaction_status = $result['transaction_status'];
-$fraud_status = $result['fraud_status'] ?? 'accept'; // Anggap aman jika fraud status tidak ada
-$transaction_id = $result['transaction_id'];
-$expiry_time = $result['expiry_time'] ?? null;
-
-// Ekstrak nomor pesanan utama dari nomor percobaan pembayaran (cth: WK-123-1 -> WK-123)
-$order_parts = explode('-', $attempt_order_number);
-if (count($order_parts) < 4) { // Berdasarkan format 'WK-timestamp-userid-attempt'
-    file_put_contents($error_log_file, "WEBHOOK PARSE ERROR: Format order_id tidak valid: $attempt_order_number\n", FILE_APPEND);
-    http_response_code(400);
-    exit();
-}
-$main_order_number = $order_parts[0] . '-' . $order_parts[1] . '-' . $order_parts[2];
-
-$new_status = null;
-$notification_message = '';
-
-// Tentukan status baru di sistem Anda berdasarkan status dari Midtrans
-if ($transaction_status == 'capture' || $transaction_status == 'settlement') {
-    if ($fraud_status == 'accept') {
-        $new_status = 'belum_dicetak';
-        $notification_message = "Pembayaran untuk pesanan #{$main_order_number} telah berhasil.";
+    // Validasi Signature Key
+    $local_signature = hash("sha512", $attempt_order_number . $status_code . $gross_amount . \Midtrans\Config::$serverKey);
+    if ($notif->signature_key !== $local_signature) {
+        http_response_code(403);
+        write_log("CRITICAL: Invalid signature key!");
+        write_log("CRITICAL: Expected: $local_signature");
+        write_log("CRITICAL: Got: " . $notif->signature_key);
+        die("Forbidden: Invalid signature.");
     }
-} else if (in_array($transaction_status, ['cancel', 'deny', 'expire'])) {
-    $new_status = 'cancelled';
-    $notification_message = "Pembayaran untuk pesanan #{$main_order_number} dibatalkan atau kedaluwarsa.";
-}
+    write_log("SUCCESS: Signature key valid");
 
-// Jika ada status baru yang perlu diupdate
-if ($new_status) {
-    // 1. Ambil data pesanan dari database terlebih dahulu
-    $stmt_select = $conn->prepare("SELECT id, user_id, status FROM orders WHERE order_number = ? LIMIT 1");
-    $stmt_select->bind_param("s", $main_order_number);
-    $stmt_select->execute();
-    $order_data = $stmt_select->get_result()->fetch_assoc();
-    $stmt_select->close();
+    // Ambil order_id dari payment_attempts
+    $stmt_get_order = $conn->prepare("SELECT order_id FROM payment_attempts WHERE attempt_order_number = ?");
+    $stmt_get_order->bind_param("s", $attempt_order_number);
+    $stmt_get_order->execute();
+    $order_data = $stmt_get_order->get_result()->fetch_assoc();
+    $stmt_get_order->close();
 
-    if ($order_data) {
-        // 2. Hanya update jika status saat ini adalah 'waiting_payment'
-        if ($order_data['status'] === 'waiting_payment') {
-            $stmt_update = $conn->prepare("UPDATE orders SET status = ?, midtrans_transaction_id = ?, expiry_time = ? WHERE id = ?");
-            $stmt_update->bind_param("sssi", $new_status, $transaction_id, $expiry_time, $order_data['id']);
-            
-            if ($stmt_update->execute()) {
-                file_put_contents($log_file, "DB UPDATE SUCCESS: Pesanan #{$main_order_number} diupdate menjadi '{$new_status}'.\n", FILE_APPEND);
-                // Buat notifikasi untuk pengguna di dalam sistem (jika ada fiturnya)
-                if (!empty($notification_message)) {
-                    create_notification($conn, $order_data['user_id'], $notification_message);
-                }
-            } else {
-                file_put_contents($error_log_file, "DB UPDATE FAILED: Gagal mengupdate pesanan #{$main_order_number}. Error: " . $stmt_update->error . "\n", FILE_APPEND);
-            }
-            $stmt_update->close();
-        } else {
-            file_put_contents($log_file, "DB UPDATE SKIPPED: Notifikasi untuk pesanan #{$main_order_number} diterima, tapi status sudah '{$order_data['status']}'. Tidak ada tindakan.\n", FILE_APPEND);
+    if (!$order_data) {
+        http_response_code(404);
+        write_log("ERROR: Order not found for attempt: $attempt_order_number");
+        die("Order not found.");
+    }
+
+    $order_id = $order_data['order_id'];
+    write_log("INFO: Found Order ID: $order_id");
+    
+    // Mulai Transaction Database
+    $conn->begin_transaction();
+    write_log("INFO: Database transaction started");
+
+    try {
+        // Lock row untuk mencegah race condition
+        $current_status_res = $conn->query("SELECT status, user_id FROM orders WHERE id=$order_id FOR UPDATE");
+        $current_order = $current_status_res->fetch_assoc();
+        $current_status = $current_order['status'];
+        $user_id = $current_order['user_id'];
+
+        write_log("INFO: Current order status: $current_status");
+        write_log("INFO: User ID: $user_id");
+
+        // Hanya proses jika status masih 'waiting_payment'
+        if ($current_status !== 'waiting_payment') {
+            $conn->commit();
+            http_response_code(200);
+            write_log("INFO: Order already processed. Current status: $current_status. Ignoring.");
+            echo "OK (Already Processed)";
+            exit;
         }
-    } else {
-        file_put_contents($error_log_file, "DB LOOKUP FAILED: Pesanan #{$main_order_number} tidak ditemukan di database.\n", FILE_APPEND);
+
+        $new_status = null;
+        $is_success = false;
+        
+        if ($transaction_status == 'settlement' || ($transaction_status == 'capture' && $fraud_status == 'accept')) {
+            $new_status = 'belum_dicetak';
+            $is_success = true;
+            write_log("ACTION: Payment SUCCESS - Setting status to 'belum_dicetak'");
+        } else if (in_array($transaction_status, ['cancel', 'deny', 'expire'])) {
+            $new_status = 'cancelled';
+            write_log("ACTION: Payment FAILED/CANCELLED - Setting status to 'cancelled'");
+        } else {
+            write_log("WARNING: Unhandled transaction status: $transaction_status");
+        }
+
+        if ($new_status) {
+            // Update status order
+            $stmt = $conn->prepare("UPDATE orders SET status = ?, midtrans_transaction_id = ? WHERE id = ?");
+            $stmt->bind_param("ssi", $new_status, $transaction_id, $order_id);
+            
+            if ($stmt->execute()) {
+                write_log("SUCCESS: Order status updated to '$new_status' for Order ID: $order_id");
+            } else {
+                throw new Exception("Failed to update order status: " . $stmt->error);
+            }
+            $stmt->close();
+
+            // ============================================================
+            // PENCATATAN RIWAYAT PEMBELIAN (JIKA BERHASIL)
+            // ============================================================
+            if ($is_success) {
+                write_log("INFO: Processing purchase records...");
+                
+                // Ambil detail item pesanan dengan stock_cycle_id
+                $stmt_items = $conn->prepare("
+                    SELECT oi.product_id, oi.quantity, p.stock_cycle_id, p.name as product_name
+                    FROM order_items oi 
+                    JOIN products p ON oi.product_id = p.id 
+                    WHERE oi.order_id = ?
+                ");
+                $stmt_items->bind_param("i", $order_id);
+                $stmt_items->execute();
+                $order_items = $stmt_items->get_result()->fetch_all(MYSQLI_ASSOC);
+                $stmt_items->close();
+
+                write_log("INFO: Found " . count($order_items) . " items in order");
+
+                if (!empty($order_items)) {
+                    $stmt_record = $conn->prepare("
+                        INSERT INTO user_purchase_records 
+                        (user_id, product_id, stock_cycle_id, quantity_purchased, last_purchase_date) 
+                        VALUES (?, ?, ?, ?, NOW()) 
+                        ON DUPLICATE KEY UPDATE 
+                            quantity_purchased = quantity_purchased + VALUES(quantity_purchased),
+                            last_purchase_date = NOW()
+                    ");
+                    
+                    foreach ($order_items as $item) {
+                        $stmt_record->bind_param(
+                            "iiii", 
+                            $user_id, 
+                            $item['product_id'], 
+                            $item['stock_cycle_id'], 
+                            $item['quantity']
+                        );
+                        
+                        if ($stmt_record->execute()) {
+                            write_log("SUCCESS: Recorded purchase - User: $user_id, Product: {$item['product_id']} ({$item['product_name']}), Cycle: {$item['stock_cycle_id']}, Qty: {$item['quantity']}");
+                        } else {
+                            write_log("ERROR: Failed to record purchase for Product: {$item['product_id']} - " . $stmt_record->error);
+                        }
+                    }
+                    $stmt_record->close();
+                } else {
+                    write_log("WARNING: No items found for order $order_id");
+                }
+
+                // Kirim notifikasi sukses
+                create_notification($conn, $user_id, "Pembayaran berhasil! Pesanan Anda sedang diproses.");
+                write_log("INFO: Success notification sent to user $user_id");
+            }
+            
+            // ============================================================
+            // KEMBALIKAN STOK (JIKA DIBATALKAN)
+            // ============================================================
+            if ($new_status === 'cancelled') {
+                write_log("INFO: Restocking cancelled order items...");
+                
+                $stmt_items = $conn->prepare("SELECT product_id, quantity FROM order_items WHERE order_id = ?");
+                $stmt_items->bind_param("i", $order_id);
+                $stmt_items->execute();
+                $order_items = $stmt_items->get_result()->fetch_all(MYSQLI_ASSOC);
+                $stmt_items->close();
+                
+                $stmt_restock = $conn->prepare("UPDATE products SET stock = stock + ? WHERE id = ?");
+                foreach ($order_items as $item) {
+                    $stmt_restock->bind_param("ii", $item['quantity'], $item['product_id']);
+                    if ($stmt_restock->execute()) {
+                        write_log("SUCCESS: Restocked Product {$item['product_id']}: +{$item['quantity']}");
+                    } else {
+                        write_log("ERROR: Failed to restock Product {$item['product_id']}: " . $stmt_restock->error);
+                    }
+                }
+                $stmt_restock->close();
+
+                // Kirim notifikasi pembatalan
+                create_notification($conn, $user_id, "Pembayaran dibatalkan atau kedaluwarsa. Stok telah dikembalikan.");
+                write_log("INFO: Cancellation notification sent to user $user_id");
+            }
+        }
+
+        $conn->commit();
+        write_log("SUCCESS: Database transaction committed");
+        http_response_code(200);
+        echo "OK";
+
+    } catch (Exception $e) {
+        $conn->rollback();
+        write_log("FATAL: DB Transaction Error: " . $e->getMessage());
+        write_log("FATAL: Stack trace: " . $e->getTraceAsString());
+        http_response_code(500);
+        echo "ERROR: " . $e->getMessage();
     }
+
+} catch (Exception $e) {
+    write_log("FATAL: Midtrans Notification Error: " . $e->getMessage());
+    write_log("FATAL: Stack trace: " . $e->getTraceAsString());
+    http_response_code(500);
+    echo "ERROR: " . $e->getMessage();
 }
 
-// Beri tahu Midtrans bahwa notifikasi sudah diterima dengan sukses
-http_response_code(200);
-echo "Notification processed successfully.";
+write_log("========================================\n");

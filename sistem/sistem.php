@@ -237,7 +237,10 @@ function get_cart_items_for_display($conn, $user_id) {
 function get_cart_items_for_calculation($conn, $user_id) {
     $cart_data = [];
     if ($user_id > 0) {
-        $stmt = $conn->prepare("SELECT c.quantity, p.price FROM cart c JOIN products p ON c.product_id = p.id WHERE c.user_id = ?");
+        // ============================================================
+        // KUNCI PERBAIKAN: Menambahkan p.id as product_id
+        // ============================================================
+        $stmt = $conn->prepare("SELECT c.quantity, p.price, p.id as product_id, p.name FROM cart c JOIN products p ON c.product_id = p.id WHERE c.user_id = ?");
         $stmt->bind_param("i", $user_id);
         $stmt->execute();
         $result = $stmt->get_result();
@@ -248,13 +251,25 @@ function get_cart_items_for_calculation($conn, $user_id) {
             $pids = array_keys($_SESSION['cart']);
             if (!empty($pids)) {
                 $placeholders = implode(',', array_fill(0, count($pids), '?'));
-                $stmt = $conn->prepare("SELECT id, price FROM products WHERE id IN ($placeholders)");
+                // Ambil juga id dan name
+                $stmt = $conn->prepare("SELECT id, price, name FROM products WHERE id IN ($placeholders)");
                 $stmt->bind_param(str_repeat('i', count($pids)), ...$pids);
                 $stmt->execute();
-                $prices = array_column($stmt->get_result()->fetch_all(MYSQLI_ASSOC), 'price', 'id');
+                $products_db = $stmt->get_result()->fetch_all(MYSQLI_ASSOC);
                 $stmt->close();
+                
+                $prices = array_column($products_db, 'price', 'id');
+                $names = array_column($products_db, 'name', 'id');
+
                 foreach ($_SESSION['cart'] as $pid => $item) {
-                    if (isset($prices[$pid])) $cart_data[] = ['quantity' => $item['quantity'], 'price' => $prices[$pid]];
+                    if (isset($prices[$pid])) {
+                        $cart_data[] = [
+                            'quantity' => $item['quantity'], 
+                            'price' => $prices[$pid],
+                            'product_id' => $pid, // tambahkan product_id
+                            'name' => $names[$pid] // tambahkan name
+                        ];
+                    }
                 }
             }
         }
@@ -329,14 +344,55 @@ function get_user_addresses($conn, $user_id) {
     return $addresses;
 }
 
-function save_or_get_user_address($conn, $user_id, $address_data) {
-    $stmt_insert = $conn->prepare("INSERT INTO user_addresses (user_id, full_name, phone_number, province, city, subdistrict, postal_code, address_line_1, address_line_2) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)");
-    $stmt_insert->bind_param("issssssss", $user_id, $address_data['full_name'], $address_data['phone_number'], $address_data['province'], $address_data['city'], $address_data['subdistrict'], $address_data['postal_code'], $address_data['address_line_1'], $address_data['address_line_2']);
-    $stmt_insert->execute();
-    $new_id = $conn->insert_id;
-    $stmt_insert->close();
-    return $new_id;
+// ============================================================
+// FUNGSI ALAMAT BARU (Perbaikan Logika)
+// ============================================================
+function get_user_address_by_id($conn, $address_id, $user_id) {
+    $stmt = $conn->prepare("SELECT * FROM user_addresses WHERE id = ? AND user_id = ?");
+    $stmt->bind_param("ii", $address_id, $user_id);
+    $stmt->execute();
+    $result = $stmt->get_result();
+    $address = $result->fetch_assoc();
+    $stmt->close();
+    return $address;
 }
+
+function save_user_address($conn, $user_id, $address_data) {
+    // Jika 'is_default' dicentang (1), nonaktifkan default lainnya dulu
+    if (isset($address_data['is_default']) && $address_data['is_default'] == 1) {
+        $stmt_reset = $conn->prepare("UPDATE user_addresses SET is_default = 0 WHERE user_id = ?");
+        $stmt_reset->bind_param("i", $user_id);
+        $stmt_reset->execute();
+        $stmt_reset->close();
+    } else {
+        $address_data['is_default'] = 0; // Pastikan 0 jika tidak dicentang
+    }
+
+    $stmt_insert = $conn->prepare("
+        INSERT INTO user_addresses 
+        (user_id, full_name, phone_number, province, city, subdistrict, postal_code, address_line_1, address_line_2, is_default) 
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ");
+    $stmt_insert->bind_param("issssssssi", 
+        $user_id, 
+        $address_data['full_name'], $address_data['phone_number'], 
+        $address_data['province'], $address_data['city'], $address_data['subdistrict'], 
+        $address_data['postal_code'], $address_data['address_line_1'], 
+        $address_data['address_line_2'], $address_data['is_default']
+    );
+
+    if ($stmt_insert->execute()) {
+        $new_id = $conn->insert_id;
+        $stmt_insert->close();
+        return $new_id;
+    } else {
+        $stmt_insert->close();
+        return false;
+    }
+}
+// ============================================================
+// AKHIR FUNGSI ALAMAT BARU
+// ============================================================
 
 function set_default_address($conn, $user_id, $address_id) {
     $conn->query("UPDATE user_addresses SET is_default = 0 WHERE user_id = $user_id");
@@ -388,6 +444,32 @@ function get_user_purchase_count($conn, $user_id, $product_id, $stock_cycle_id) 
     
     return (int)($row['quantity_purchased'] ?? 0);
 }
+
+// ============================================================
+// KUNCI PERBAIKAN (BARU): Hitung kuota yang "dipesan" di order waiting_payment
+// ============================================================
+function get_user_pending_purchase_count($conn, $user_id, $product_id, $stock_cycle_id) {
+    if (!$user_id || !$product_id) return 0;
+
+    $stmt = $conn->prepare("
+        SELECT SUM(oi.quantity) as pending_quantity 
+        FROM orders o
+        JOIN order_items oi ON o.id = oi.order_id
+        JOIN products p ON oi.product_id = p.id
+        WHERE o.user_id = ? 
+          AND oi.product_id = ?
+          AND o.status = 'waiting_payment'
+          AND p.stock_cycle_id = ?
+    ");
+    $stmt->bind_param("iii", $user_id, $product_id, $stock_cycle_id);
+    $stmt->execute();
+    $result = $stmt->get_result();
+    $row = $result->fetch_assoc();
+    $stmt->close();
+
+    return (int)($row['pending_quantity'] ?? 0);
+}
+
 
 function get_quantity_in_cart($conn, $user_id, $product_id) {
     if ($user_id > 0) {

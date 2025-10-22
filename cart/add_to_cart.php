@@ -1,5 +1,6 @@
 <?php
 // File: cart/add_to_cart.php
+// VERSI FIXED: Pengecekan limit yang benar (termasuk pending order)
 
 require_once '../config/config.php';
 require_once '../sistem/sistem.php';
@@ -28,27 +29,55 @@ if (!$product) {
 
 $quantity_in_cart = get_quantity_in_cart($conn, $user_id, $product_id);
 
-// Cek Stok Total
+// Pengecekan Stok Total
 if (($quantity_in_cart + $quantity_to_add) > $product['stock']) {
     set_flashdata('error', "Stok untuk '" . htmlspecialchars($product['name']) . "' tidak mencukupi. Sisa stok: " . $product['stock']);
     redirect($redirect_url);
 }
 
-// Cek Limit Pembelian (hanya untuk user yang login)
+// ============================================================
+// KUNCI PERBAIKAN #4 (DIPERBARUI): CEK LIMIT PEMBELIAN (TERMASUK PENDING)
+// ============================================================
 if ($user_id > 0 && $product['purchase_limit'] > 0) {
-    // PERBAIKAN: Kirim 4 argumen ke fungsi
+    // Hitung jumlah yang sudah dibeli user (dari order sukses)
     $already_bought = get_user_purchase_count($conn, $user_id, $product_id, $product['stock_cycle_id']);
     
-    if (($already_bought + $quantity_in_cart + $quantity_to_add) > $product['purchase_limit']) {
-        $sisa_kuota = max(0, $product['purchase_limit'] - ($already_bought + $quantity_in_cart));
-        $message = "Batas pembelian untuk '" . htmlspecialchars($product['name']) . "' adalah " . $product['purchase_limit'] . " buah. ";
-        $message .= $sisa_kuota > 0 ? "Anda hanya dapat menambahkan {$sisa_kuota} buah lagi." : "Anda telah mencapai batas pembelian.";
+    // (PERBAIKAN) Hitung jumlah yang sedang dipesan (dari order waiting_payment)
+    $pending_bought = get_user_pending_purchase_count($conn, $user_id, $product_id, $product['stock_cycle_id']);
+    
+    // Total yang akan dibeli = (sudah dibeli) + (pending) + (di cart) + (mau ditambah)
+    $total_will_purchase = $already_bought + $pending_bought + $quantity_in_cart + $quantity_to_add;
+    
+    if ($total_will_purchase > $product['purchase_limit']) {
+        $total_committed = $already_bought + $pending_bought;
+        $remaining_quota = max(0, $product['purchase_limit'] - $total_committed);
+        $can_add_to_cart = max(0, $remaining_quota - $quantity_in_cart);
+        
+        $message = "Gagal! Batas pembelian untuk '" . htmlspecialchars($product['name']) . "' adalah " . $product['purchase_limit'] . " buah. ";
+        
+        if ($already_bought > 0) {
+            $message .= "Anda sudah membeli {$already_bought} buah. ";
+        }
+        if ($pending_bought > 0) {
+            $message .= "Anda memiliki {$pending_bought} buah di pesanan yang menunggu pembayaran. ";
+        }
+        
+        if ($quantity_in_cart > 0) {
+            $message .= "Di keranjang: {$quantity_in_cart} buah. ";
+        }
+        
+        if ($can_add_to_cart > 0) {
+            $message .= "Anda hanya dapat menambahkan {$can_add_to_cart} buah lagi.";
+        } else {
+            $message .= "Anda telah mencapai batas pembelian/pemesanan untuk cycle ini.";
+        }
+        
         set_flashdata('error', $message);
         redirect($redirect_url);
     }
 }
 
-// --- LOGIKA UTAMA ---
+// --- LOGIKA UTAMA: Lolos Pengecekan ---
 if ($user_id > 0) {
     $stmt = $conn->prepare("
         INSERT INTO cart (user_id, product_id, quantity) 
@@ -67,5 +96,4 @@ if ($user_id > 0) {
 }
 
 set_flashdata('success', "'" . htmlspecialchars($product['name']) . "' berhasil ditambahkan ke keranjang.");
-redirect($redirect_url);
-?>
+redirect('/cart/cart.php');

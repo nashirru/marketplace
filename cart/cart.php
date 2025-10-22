@@ -1,12 +1,72 @@
 <?php
 // File: cart/cart.php
+// VERSI FIXED: Validasi limit yang konsisten (termasuk pending order)
 
 require_once '../config/config.php';
 require_once '../sistem/sistem.php';
 require_once '../partial/partial.php';
 
+$user_id = $_SESSION['user_id'] ?? 0;
+
+// ============================================================
+// KUNCI PERBAIKAN #5 (DIPERBARUI): VALIDASI OTOMATIS SAAT LOAD KERANJANG
+// ============================================================
+$cart_items_raw = get_cart_items_for_display($conn, $user_id);
+$cart_was_updated = false;
+$update_messages = [];
+
+foreach ($cart_items_raw as $item) {
+    $current_qty_in_cart = $item['quantity'];
+    $max_allowed_in_cart = (int)$item['stock'];
+
+    // Cek limit hanya untuk user yang login
+    if (isset($item['purchase_limit']) && (int)$item['purchase_limit'] > 0 && $user_id > 0) {
+        // (PERBAIKAN) Hitung semua kuota yang sudah terpakai (sukses + pending)
+        $already_bought = get_user_purchase_count($conn, $user_id, $item['product_id'], $item['stock_cycle_id']);
+        $pending_bought = get_user_pending_purchase_count($conn, $user_id, $item['product_id'], $item['stock_cycle_id']);
+        
+        $total_committed = $already_bought + $pending_bought;
+        $remaining_quota = max(0, (int)$item['purchase_limit'] - $total_committed);
+        
+        $max_allowed_in_cart = min($max_allowed_in_cart, $remaining_quota);
+    }
+
+    if ($current_qty_in_cart > $max_allowed_in_cart) {
+        $cart_was_updated = true;
+
+        if ($max_allowed_in_cart > 0) {
+            $update_messages[] = "Jumlah '" . htmlspecialchars($item['name']) . "' disesuaikan menjadi $max_allowed_in_cart karena melebihi sisa kuota/stok Anda.";
+            
+            if ($user_id > 0) {
+                $stmt = $conn->prepare("UPDATE cart SET quantity = ? WHERE user_id = ? AND product_id = ?");
+                $stmt->bind_param("iii", $max_allowed_in_cart, $user_id, $item['product_id']);
+                $stmt->execute();
+                $stmt->close();
+            } else {
+                $_SESSION['cart'][$item['product_id']]['quantity'] = $max_allowed_in_cart;
+            }
+        } else {
+            $update_messages[] = "'" . htmlspecialchars($item['name']) . "' dihapus dari keranjang karena Anda telah mencapai batas pembelian/pemesanan atau stok habis.";
+            
+            if ($user_id > 0) {
+                $stmt = $conn->prepare("DELETE FROM cart WHERE user_id = ? AND product_id = ?");
+                $stmt->bind_param("ii", $user_id, $item['product_id']);
+                $stmt->execute();
+                $stmt->close();
+            } else {
+                unset($_SESSION['cart'][$item['product_id']]);
+            }
+        }
+    }
+}
+
+if ($cart_was_updated) {
+    set_flashdata('info', implode('<br>', $update_messages));
+    redirect('/cart/cart.php');
+}
+
 // =================================================================
-// START: Logic for Handling Cart Updates (AJAX)
+// LOGIKA UPDATE AJAX (DIPERBARUI)
 // =================================================================
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['ajax'])) {
     
@@ -18,14 +78,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['ajax'])) {
 
     $product_id = (int)($_POST['product_id'] ?? 0);
     $action = (string)($_POST['action'] ?? '');
-    $user_id = $_SESSION['user_id'] ?? 0;
 
     if ($product_id <= 0 || $action !== 'update') {
         send_json_response(['success' => false, 'message' => 'Data tidak valid.']);
     }
 
     $quantity = (int)($_POST['quantity'] ?? 1);
-    if ($quantity < 1) $quantity = 1;
+    if ($quantity < 0) $quantity = 0;
 
     $stmt_product = $conn->prepare("SELECT price, stock, name, purchase_limit, stock_cycle_id FROM products WHERE id = ?");
     $stmt_product->bind_param("i", $product_id);
@@ -40,40 +99,51 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['ajax'])) {
     $max_stock = (int)$product['stock'];
     $purchase_limit = (int)$product['purchase_limit'];
 
-    if ($quantity > $max_stock) {
-        send_json_response(['success' => false, 'message' => 'Stok produk hanya tersedia ' . $max_stock . ' buah.', 'newQuantity' => $max_stock]);
+    $max_allowed = $max_stock;
+    if ($user_id > 0 && $purchase_limit > 0) {
+        // (PERBAIKAN) Hitung semua kuota yang sudah terpakai (sukses + pending)
+        $already_bought = get_user_purchase_count($conn, $user_id, $product_id, $product['stock_cycle_id']);
+        $pending_bought = get_user_pending_purchase_count($conn, $user_id, $product_id, $product['stock_cycle_id']);
+        
+        $total_committed = $already_bought + $pending_bought;
+        $remaining_quota = max(0, $purchase_limit - $total_committed);
+        
+        $max_allowed = min($max_stock, $remaining_quota);
     }
 
-    if ($user_id > 0 && $purchase_limit > 0) {
-        $already_bought = get_user_purchase_count($conn, $user_id, $product_id, $product['stock_cycle_id']);
-        if (($already_bought + $quantity) > $purchase_limit) {
-            $allowed_in_cart = max(0, $purchase_limit - $already_bought);
-            send_json_response([
-                'success' => false, 
-                'message' => 'Batas pembelian Anda hanya ' . $purchase_limit . ' buah. Sisa kuota di keranjang: ' . $allowed_in_cart . '.', 
-                'newQuantity' => $allowed_in_cart
-            ]);
+    if ($quantity > $max_allowed) {
+        $quantity = $max_allowed;
+        // Kirim pesan jika kuantitas disesuaikan
+        if ($quantity == 0) {
+             send_json_response([
+                'success' => true,
+                'newQuantity' => 0,
+                'message' => 'Anda telah mencapai batas. Item dihapus.'
+             ]);
         }
     }
     
     if ($user_id > 0) { 
-        $stmt = $conn->prepare("INSERT INTO cart (user_id, product_id, quantity) VALUES (?, ?, ?) ON DUPLICATE KEY UPDATE quantity = ?");
-        $stmt->bind_param("iiii", $user_id, $product_id, $quantity, $quantity);
+        if ($quantity > 0) {
+            $stmt = $conn->prepare("INSERT INTO cart (user_id, product_id, quantity) VALUES (?, ?, ?) ON DUPLICATE KEY UPDATE quantity = ?");
+            $stmt->bind_param("iiii", $user_id, $product_id, $quantity, $quantity);
+        } else {
+            $stmt = $conn->prepare("DELETE FROM cart WHERE user_id = ? AND product_id = ?");
+            $stmt->bind_param("ii", $user_id, $product_id);
+        }
         $stmt->execute();
         $stmt->close();
     } else { 
-        if (isset($_SESSION['cart'][$product_id])) {
-            $_SESSION['cart'][$product_id]['quantity'] = $quantity;
+        if ($quantity > 0) {
+            if (isset($_SESSION['cart'][$product_id])) $_SESSION['cart'][$product_id]['quantity'] = $quantity;
+        } else {
+            unset($_SESSION['cart'][$product_id]);
         }
     }
 
     $cart_data_for_calc = get_cart_items_for_calculation($conn, $user_id);
-    $total_price = 0;
-    $total_items = 0;
-    foreach($cart_data_for_calc as $item) {
-        $total_price += $item['price'] * $item['quantity'];
-        $total_items += $item['quantity'];
-    }
+    $total_price = array_reduce($cart_data_for_calc, fn($sum, $item) => $sum + ($item['price'] * $item['quantity']), 0);
+    $total_items = array_reduce($cart_data_for_calc, fn($sum, $item) => $sum + $item['quantity'], 0);
 
     send_json_response([
         'success' => true,
@@ -83,13 +153,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['ajax'])) {
         'newQuantity' => $quantity
     ]);
 }
-// --- Handle form non-ajax (tombol hapus) ---
-if ($_SERVER['REQUEST_METHOD'] === 'POST' && !isset($_POST['ajax'])) {
-    $product_id = (int)($_POST['product_id'] ?? 0);
-    $action = $_POST['action'] ?? '';
-    $user_id = $_SESSION['user_id'] ?? 0;
 
-    if ($action === 'remove' && $product_id > 0) {
+// Handle form non-ajax (tombol hapus)
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && !isset($_POST['ajax'])) {
+    if (($_POST['action'] ?? '') === 'remove' && ($_POST['product_id'] ?? 0) > 0) {
+        $product_id = (int)$_POST['product_id'];
         if ($user_id > 0) {
             $stmt = $conn->prepare("DELETE FROM cart WHERE user_id = ? AND product_id = ?");
             $stmt->bind_param("ii", $user_id, $product_id);
@@ -98,22 +166,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !isset($_POST['ajax'])) {
         } else {
             unset($_SESSION['cart'][$product_id]);
         }
-        set_flashdata('success', 'Produk berhasil dihapus.');
+        set_flashdata('success', 'Produk berhasil dihapus dari keranjang.');
     }
     redirect('/cart/cart.php');
 }
 
 // =================================================================
-// END: Logic Handling
-// =================================================================
 
-$user_id = $_SESSION['user_id'] ?? 0;
 $cart_items = get_cart_items_for_display($conn, $user_id);
-$total_price = 0;
-foreach($cart_items as $item) {
-    $total_price += $item['price'] * $item['quantity'];
-}
-
+$total_price = array_reduce($cart_items, fn($sum, $item) => $sum + ($item['price'] * $item['quantity']), 0);
 $page_title = "Keranjang Belanja";
 ?>
 
@@ -150,17 +211,17 @@ $page_title = "Keranjang Belanja";
                         <?php 
                         foreach ($cart_items as $item): 
                             $limit_text = '';
+                            $max_qty_input = (int)$item['stock'];
+
                             if (isset($item['purchase_limit']) && (int)$item['purchase_limit'] > 0 && $user_id > 0) {
-                                // PERBAIKAN: Kirim 4 argumen ke fungsi
+                                // (PERBAIKAN) Hitung semua kuota yang sudah terpakai (sukses + pending)
                                 $already_bought = get_user_purchase_count($conn, $user_id, $item['product_id'], $item['stock_cycle_id']);
-                                $allowed_in_cart = max(0, (int)$item['purchase_limit'] - $already_bought);
-                                $limit_text = "Limit: {$item['purchase_limit']} ";
-                                if ($already_bought > 0) {
-                                    $limit_text .= "(Sudah beli {$already_bought})";
-                                }
-                                $max_qty_input = min((int)$item['stock'], $allowed_in_cart);
-                            } else {
-                                $max_qty_input = (int)$item['stock']; 
+                                $pending_bought = get_user_pending_purchase_count($conn, $user_id, $item['product_id'], $item['stock_cycle_id']);
+                                $total_committed = $already_bought + $pending_bought;
+                                $remaining_quota = max(0, (int)$item['purchase_limit'] - $total_committed);
+                                
+                                $limit_text = "Limit: {$item['purchase_limit']}. Sisa kuota Anda: {$remaining_quota}";
+                                $max_qty_input = min((int)$item['stock'], $remaining_quota);
                             }
                         ?>
                             <div class="p-4 border-b flex flex-col md:flex-row items-center gap-4">
@@ -170,9 +231,9 @@ $page_title = "Keranjang Belanja";
                                         <a href="<?= BASE_URL ?>/product/product.php?id=<?= encode_id($item['product_id']) ?>" class="font-semibold text-gray-800 hover:text-indigo-600"><?= htmlspecialchars($item['name']) ?></a>
                                         <p class="text-sm text-gray-500">Stok: <?= $item['stock'] ?></p>
                                         <?php if (!empty($limit_text)): ?>
-                                            <p class="text-xs text-red-500 font-medium"><?= $limit_text ?></p>
+                                            <p class="text-xs text-red-500 font-medium mt-1"><i class="fas fa-exclamation-circle"></i> <?= $limit_text ?></p>
                                         <?php endif; ?>
-                                        <form method="POST" class="mt-1">
+                                        <form method="POST" class="mt-2">
                                             <input type="hidden" name="product_id" value="<?= $item['product_id'] ?>">
                                             <input type="hidden" name="action" value="remove">
                                             <button type="submit" class="text-red-500 hover:text-red-700 text-sm font-semibold" title="Hapus Item"><i class="fas fa-trash-alt mr-1"></i> Hapus</button>
@@ -184,7 +245,7 @@ $page_title = "Keranjang Belanja";
                                     <div class="flex items-center border border-gray-300 rounded-md">
                                         <button class="quantity-change-btn p-2 text-gray-600 hover:bg-gray-100 rounded-l-md" data-product-id="<?= $item['product_id'] ?>" data-change="-1">-</button>
                                         <input type="number" class="quantity-input w-12 text-center border-l border-r" 
-                                            value="<?= $item['quantity'] ?>" min="1" max="<?= $max_qty_input ?>" data-product-id="<?= $item['product_id'] ?>">
+                                            value="<?= $item['quantity'] ?>" min="0" max="<?= $max_qty_input ?>" data-product-id="<?= $item['product_id'] ?>">
                                         <button class="quantity-change-btn p-2 text-gray-600 hover:bg-gray-100 rounded-r-md" data-product-id="<?= $item['product_id'] ?>" data-change="1">+</button>
                                     </div>
                                 </div>
@@ -230,40 +291,41 @@ $page_title = "Keranjang Belanja";
                 if (!response.ok) throw new Error('Network response was not ok.');
                 const result = await response.json();
                 
-                const inputElement = document.querySelector(`.quantity-input[data-product-id="${productId}"]`);
-
                 if (result.success) {
-                    document.getElementById(`subtotal-${productId}`).textContent = result.newSubtotalFormatted;
+                    if (result.newQuantity == 0) {
+                        window.location.reload(); // Muat ulang jika item jadi 0
+                        return;
+                    }
+                    // Update nilai di halaman
+                    const subtotalEl = document.getElementById(`subtotal-${productId}`);
+                    if(subtotalEl) subtotalEl.textContent = result.newSubtotalFormatted;
+                    
                     document.getElementById('summary-subtotal').textContent = result.newGrandTotalFormatted;
                     document.getElementById('summary-total').textContent = result.newGrandTotalFormatted;
                     
                     const cartBadge = document.getElementById('cart-count-badge');
                     if (cartBadge) {
-                        if (result.newCartCount > 0) {
-                            cartBadge.textContent = result.newCartCount;
-                            cartBadge.style.display = 'inline-block';
-                        } else {
-                            cartBadge.style.display = 'none';
-                        }
+                        cartBadge.textContent = result.newCartCount > 0 ? result.newCartCount : '';
+                        cartBadge.style.display = result.newCartCount > 0 ? 'inline-flex' : 'none';
                     }
-                    if (result.newQuantity !== undefined && inputElement.value != result.newQuantity) {
-                        inputElement.value = result.newQuantity;
+                    
+                    // (PERBAIKAN) Jika kuantitas disesuaikan oleh server (misal: > max)
+                    const inputEl = document.querySelector(`.quantity-input[data-product-id="${productId}"]`);
+                    if(inputEl && inputEl.value != result.newQuantity) {
+                        inputEl.value = result.newQuantity;
+                        // Mungkin tampilkan pesan... tapi untuk sekarang, reload adalah yg teraman
+                        window.location.reload();
                     }
+
                 } else {
                     alert(result.message || 'Gagal memperbarui keranjang.');
-                    if (result.newQuantity !== undefined && inputElement) {
-                        inputElement.value = result.newQuantity;
-                        if(result.newQuantity > 0) {
-                           // Auto-correct quantity
-                           debouncedUpdateCart(productId, result.newQuantity); 
-                        } else {
-                           window.location.reload();
-                        }
-                    }
+                    // Muat ulang untuk sinkronisasi
+                    window.location.reload();
                 }
             } catch (error) {
                 console.error('Error updating cart:', error);
-                alert('Terjadi kesalahan. Silakan coba lagi.');
+                alert('Terjadi kesalahan. Halaman akan dimuat ulang.');
+                window.location.reload();
             }
         }
 
@@ -280,12 +342,19 @@ $page_title = "Keranjang Belanja";
                         let oldValue = parseInt(input.value);
                         let newValue = oldValue + change;
                         const maxAllowed = parseInt(input.max);
+                        const minAllowed = parseInt(input.min);
 
-                        if (newValue < 1) newValue = 1;
-                        if (newValue > maxAllowed) newValue = maxAllowed;
+                        if (newValue < minAllowed) newValue = minAllowed;
+                        if (newValue > maxAllowed) {
+                             newValue = maxAllowed;
+                             // Beri tahu user mereka mentok
+                             alert("Anda telah mencapai sisa kuota/stok maksimum untuk produk ini.");
+                        }
                         
-                        input.value = newValue;
-                        debouncedUpdateCart(productId, newValue);
+                        if (oldValue !== newValue) {
+                            input.value = newValue;
+                            debouncedUpdateCart(productId, newValue);
+                        }
                     }
                 });
             });
@@ -295,15 +364,18 @@ $page_title = "Keranjang Belanja";
                     const productId = this.dataset.productId;
                     let quantity = parseInt(this.value);
                     const maxAllowed = parseInt(this.max);
+                    const minAllowed = parseInt(this.min);
 
-                    if (isNaN(quantity) || quantity < 1) return;
-                    
+                    if (isNaN(quantity)) return;
                     if (quantity > maxAllowed) {
                         this.value = maxAllowed;
-                        quantity = maxAllowed;
+                        alert("Anda telah mencapai sisa kuota/stok maksimum untuk produk ini.");
+                    }
+                    if (quantity < minAllowed) {
+                         this.value = minAllowed;
                     }
                     
-                    debouncedUpdateCart(productId, quantity);
+                    debouncedUpdateCart(productId, this.value);
                 });
             });
         });
