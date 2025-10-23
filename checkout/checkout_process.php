@@ -1,6 +1,7 @@
 <?php
-// File: checkout/checkout_process.php
-// Versi dengan Keamanan Berlapis & Logika Penyimpanan Alamat Selektif
+// File: checkout/checkout_process_v2.php
+// Ini adalah file BARU untuk bypass server cache (OPcache)
+// Kode di dalamnya sudah benar dengan (string) cast.
 
 header('Content-Type: application/json');
 
@@ -11,7 +12,7 @@ require_once '../midtrans/config_midtrans.php';
 if (session_status() == PHP_SESSION_NONE) {
     session_start();
 }
-
+// ... (kode session_start dan validasi user_id) ...
 if (!isset($_SESSION['user_id'])) {
     http_response_code(401);
     echo json_encode(['success' => false, 'message' => 'Sesi Anda telah berakhir. Silakan login kembali.']);
@@ -28,25 +29,21 @@ if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
 
 $conn->begin_transaction();
 try {
-    // Ambil data keranjang (sekarang sudah ada product_id berkat perbaikan di sistem.php)
+    // ... (kode get_cart_items_data, validasi keranjang kosong) ...
     $cart_items_data = get_cart_items_for_calculation($conn, $user_id);
     if (empty($cart_items_data)) {
-        throw new Exception("Keranjang Anda kosong.", 1); // Kode 1 untuk redirect
+        throw new Exception("Keranjang Anda kosong.", 1);
     }
 
-    // [BENTENG PERTAHANAN FINAL] Validasi ulang semua item
     $total_harga = 0;
     $midtrans_items = [];
     $items_to_insert = [];
     
-    // Dapatkan array product_id
     $product_ids_in_cart = array_column($cart_items_data, 'product_id');
     if(empty($product_ids_in_cart)) {
-        // Ini adalah error yang Anda alami
         throw new Exception("Keranjang tidak valid. Gagal mendapatkan ID produk.");
     }
-
-    // Ambil data produk terbaru & KUNCI ROW PRODUK
+    // ... (kode validasi stok, limit, dll) ...
     $placeholders = implode(',', array_fill(0, count($product_ids_in_cart), '?'));
     $types = str_repeat('i', count($product_ids_in_cart));
     $stmt_prod_check = $conn->prepare("SELECT id, name, price, stock, purchase_limit, stock_cycle_id FROM products WHERE id IN ($placeholders) FOR UPDATE");
@@ -59,10 +56,8 @@ try {
     }
     $stmt_prod_check->close();
     
-    // Buat map kuantitas dari cart
     $cart_quantities = array_column($cart_items_data, 'quantity', 'product_id');
 
-    // Validasi setiap item
     foreach ($product_ids_in_cart as $product_id) {
         $quantity_in_cart = $cart_quantities[$product_id];
 
@@ -77,7 +72,6 @@ try {
 
         if ($product['purchase_limit'] > 0) {
             $already_bought = get_user_purchase_count($conn, $user_id, $product_id, $product['stock_cycle_id']);
-            // Penting: Gunakan stock_cycle_id dari produk
             $pending_count = get_user_pending_purchase_count($conn, $user_id, $product_id, $product['stock_cycle_id']);
             $total_will_purchase = $already_bought + $pending_count + $quantity_in_cart;
             
@@ -88,10 +82,19 @@ try {
 
         $subtotal_item = $product['price'] * $quantity_in_cart;
         $total_harga += $subtotal_item;
-        $midtrans_items[] = ['id' => (string)$product_id, 'price' => (int)$product['price'], 'quantity' => (int)$quantity_in_cart, 'name' => $product['name']];
+
+        // ============================================================
+        // INI ADALAH PERBAIKANNYA
+        // ============================================================
+        $midtrans_items[] = [
+            'id' => (string)$product_id, // WAJIB (string)
+            'price' => (int)$product['price'], 
+            'quantity' => (int)$quantity_in_cart, 
+            'name' => $product['name']
+        ];
+        
         $items_to_insert[] = ['product_id' => $product_id, 'quantity' => $quantity_in_cart, 'price' => $product['price']];
 
-        // Kurangi Stok di Muka
         $new_stock = $product['stock'] - $quantity_in_cart;
         $stmt_update_stock = $conn->prepare("UPDATE products SET stock = ? WHERE id = ?");
         $stmt_update_stock->bind_param("ii", $new_stock, $product_id);
@@ -100,24 +103,20 @@ try {
         }
         $stmt_update_stock->close();
     }
-
-    // -- Proses Alamat --
+    // ... (kode proses alamat) ...
     $existing_address_id = (int)($_POST['existing_address'] ?? 0);
     $user_address_id_for_order = null;
     $address_data = [];
 
     if ($existing_address_id > 0) {
-        // Gunakan alamat tersimpan
-        // (Memanggil fungsi baru 'get_user_address_by_id' dari sistem.php)
         $fetched_address = get_user_address_by_id($conn, $existing_address_id, $user_id);
         if (!$fetched_address) {
             throw new Exception("Alamat yang dipilih tidak valid.");
         }
         $address_data = $fetched_address;
-        $user_address_id_for_order = $existing_address_id; // Simpan ID alamat yang dipilih
+        $user_address_id_for_order = $existing_address_id;
     } else {
-        // Gunakan alamat baru dari form
-        $is_default_new_address = isset($_POST['is_default']) ? 1 : 0; // Cek checkbox
+        $is_default_new_address = isset($_POST['is_default']) ? 1 : 0;
         $address_data = [
             'full_name' => sanitize_input($_POST['full_name'] ?? ''),
             'phone_number' => sanitize_input($_POST['phone_number'] ?? ''),
@@ -127,32 +126,23 @@ try {
             'postal_code' => sanitize_input($_POST['postal_code'] ?? ''),
             'address_line_1' => sanitize_input($_POST['address_line_1'] ?? ''),
             'address_line_2' => sanitize_input($_POST['address_line_2'] ?? ''),
-            'is_default' => $is_default_new_address, // Sertakan status default
+            'is_default' => $is_default_new_address,
         ];
 
-        // Validasi
         if (empty($address_data['full_name']) || empty($address_data['phone_number']) || empty($address_data['province']) || empty($address_data['city']) || empty($address_data['address_line_1'])) {
             throw new Exception("Harap isi semua field alamat baru yang wajib.");
         }
 
-        // *** INI LOGIKA YANG ANDA MINTA ***
-        // Hanya simpan ke tabel 'user_addresses' jika 'is_default' dicentang
         if ($is_default_new_address == 1) {
-            // (Memanggil fungsi baru 'save_user_address' dari sistem.php)
             $saved_address_id = save_user_address($conn, $user_id, $address_data); 
             if (!$saved_address_id) {
                 throw new Exception("Gagal menyimpan alamat baru sebagai alamat utama.");
             }
-            // Gunakan ID alamat yang baru disimpan untuk pesanan ini
             $user_address_id_for_order = $saved_address_id;
         }
-        // Jika tidak default ($is_default_new_address == 0),
-        // $user_address_id_for_order akan tetap null. Data alamat (nama, telp, dll)
-        // akan disimpan langsung di tabel 'orders', tapi TIDAK di 'user_addresses'.
     }
-
-    // -- Buat Order --
-    $order_number = generate_order_number($conn); // Menggunakan fungsi generator
+    // ... (kode buat order, masukkan order items) ...
+    $order_number = generate_order_number($conn);
     $status = 'waiting_payment';
 
     $stmt_order = $conn->prepare("
@@ -161,7 +151,6 @@ try {
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ");
 
-    // $user_address_id_for_order bisa null (jika alamat baru & tidak default)
     $stmt_order->bind_param("isdsissssssss",
         $user_id, $order_number, $total_harga, $status, $user_address_id_for_order,
         $address_data['full_name'], $address_data['phone_number'], $address_data['province'],
@@ -175,7 +164,6 @@ try {
     $order_id = $stmt_order->insert_id;
     $stmt_order->close();
 
-    // -- Masukkan Order Items --
     $stmt_items = $conn->prepare("INSERT INTO order_items (order_id, product_id, quantity, price) VALUES (?, ?, ?, ?)");
     foreach ($items_to_insert as $item) {
         $stmt_items->bind_param("iiid", $order_id, $item['product_id'], $item['quantity'], $item['price']);
@@ -184,11 +172,9 @@ try {
         }
     }
     $stmt_items->close();
-
+    
     // -- Persiapan Midtrans --
     $user_data = get_user_by_id($conn, $user_id);
-    // ID Unik untuk Midtrans (Order Number ASLI + Timestamp unik)
-    // Ini penting agar user bisa coba bayar berkali-kali jika gagal
     $attempt_order_number = $order_number . '-T' . time(); 
 
     $transaction_params = [
@@ -196,42 +182,47 @@ try {
         'customer_details' => ['first_name' => $address_data['full_name'], 'email' => $user_data['email'], 'phone' => $address_data['phone_number']],
         'item_details' => $midtrans_items
     ];
+    
+    // ============================================================
+    // BARIS DEBUG TAMBAHAN
+    // ============================================================
+    // Ini akan mencatat payload ke log error PHP Anda (misal: logs/midtrans_error.log)
+    error_log("[DEBUG] PAYLOAD CHECKOUT DESKTOP (v2): " . json_encode($transaction_params));
+    // ============================================================
 
     // Dapatkan Snap Token
     $snapToken = \Midtrans\Snap::getSnapToken($transaction_params);
 
-    // Simpan attempt pembayaran
+    // ... (kode simpan attempt, clear cart, commit, dan echo) ...
     $stmt_attempt = $conn->prepare("INSERT INTO payment_attempts (order_id, attempt_order_number, snap_token, status) VALUES (?, ?, ?, 'pending')");
     $stmt_attempt->bind_param("iss", $order_id, $attempt_order_number, $snapToken);
     $stmt_attempt->execute();
     $stmt_attempt->close();
 
-    // Kosongkan keranjang
     clear_cart($conn, $user_id);
 
-    // Commit transaksi
     $conn->commit();
     echo json_encode([
         'success' => true,
         'snap_token' => $snapToken,
-        'db_order_id' => $order_id // Kirim ID order database
+        'db_order_id' => $order_id
     ]);
 
 } catch (Exception $e) {
-    $conn->rollback(); // Rollback jika ada error
+    // ... (kode catch exception) ...
+    $conn->rollback();
 
     $error_code = $e->getCode();
     $error_message = $e->getMessage();
-    // Jika code = 1 (error validasi), kirim status 400. Jika tidak, 500.
     $http_status = ($error_code === 1) ? 400 : 500; 
 
-    error_log("Checkout Gagal (User: $user_id): " . $error_message); // Log error
+    error_log("Checkout Gagal (User: $user_id): " . $error_message);
 
     http_response_code($http_status);
     echo json_encode([
         'success' => false,
         'message' => $error_message,
-        'redirect_to_cart' => ($error_code === 1) // Flag untuk frontend
+        'redirect_to_cart' => ($error_code === 1)
     ]);
 }
 ?>

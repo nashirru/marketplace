@@ -1,8 +1,6 @@
 <?php
 // File: checkout/checkout.php
-// Versi dengan penyesuaian Javascript untuk menangani validasi limit dan redirect notifikasi
-// PERBARUI: Logika pemilihan alamat default DAN perbaikan final redirect JS
-// PERBARUI 2: Cache busting dan pass order_id
+// FILE LENGKAP DENGAN LOGIKA POLLING JS
 
 require_once '../config/config.php';
 require_once '../sistem/sistem.php';
@@ -27,9 +25,6 @@ $page_title = 'Checkout - ' . (get_setting($conn, 'store_name') ?? 'Warok Kite')
 <!DOCTYPE html>
 <html lang="id">
 <?php page_head($page_title, $conn); ?>
-<!-- ============================================================ -->
-<!-- PERBAIKAN CACHE: Menambahkan versi acak (?v=...) -->
-<!-- ============================================================ -->
 <script type="text/javascript"
         src="https://app.sandbox.midtrans.com/snap/snap.js?v=<?= time() ?>" 
         data-client-key="<?= htmlspecialchars(\Midtrans\Config::$clientKey); ?>"></script>
@@ -39,6 +34,7 @@ $page_title = 'Checkout - ' . (get_setting($conn, 'store_name') ?? 'Warok Kite')
 <body class="bg-gray-100">
 
 <div id="loading-overlay" class="fixed top-0 left-0 w-full h-full bg-black bg-opacity-75 z-[9999] flex justify-center items-center text-white text-xl transition-opacity duration-300 opacity-0 pointer-events-none">
+    <!-- Konten di-set oleh JS -->
     <p><i class="fas fa-spinner fa-spin mr-3"></i>Mempersiapkan pembayaran...</p>
 </div>
 
@@ -138,8 +134,8 @@ document.addEventListener('DOMContentLoaded', function() {
     const formFields = document.getElementById('address-form-fields');
     const defaultAddrData = <?= json_encode($default_address) ?>;
     
-    const paymentStatusUrlBase = '<?= BASE_URL ?>/checkout/payment_status.php'; // URL Halaman Notifikasi
-    const profileUrl = '<?= BASE_URL ?>/profile/profile.php?tab=orders'; // URL Halaman Pesanan
+    const paymentStatusUrlBase = '<?= BASE_URL ?>/checkout/payment_status.php';
+    const profileUrl = '<?= BASE_URL ?>/profile/profile.php?tab=orders';
 
     function fillForm(data) {
         document.getElementById('full_name').value = data.full_name || '';
@@ -179,7 +175,7 @@ document.addEventListener('DOMContentLoaded', function() {
     const checkoutForm = document.getElementById('checkout-form');
     const submitButton = document.getElementById('submit-button');
     const loadingOverlay = document.getElementById('loading-overlay');
-    let dbOrderId = null; // Variabel untuk menyimpan ID order
+    let dbOrderId = null;
 
     submitButton.addEventListener('click', async function(event) {
         event.preventDefault();
@@ -218,34 +214,35 @@ document.addEventListener('DOMContentLoaded', function() {
             }
 
             if (result.success && result.snap_token) {
-                
+                dbOrderId = result.db_order_id;
+                let paymentHandled = false;
+
                 // ============================================================
-                // PERBAIKAN: Simpan ID Order dari DB
+                // UPDATE: Simpan order_id ke sessionStorage untuk polling
                 // ============================================================
-                dbOrderId = result.db_order_id; // Simpan ID order
-                let paymentHandled = false; // Flag untuk mencegah redirect ganda
+                sessionStorage.setItem('pending_order_id', dbOrderId);
 
                 window.snap.pay(result.snap_token, {
                     onSuccess: function(res){
-                        paymentHandled = true; // Set flag
-                        // ============================================================
-                        // PERBAIKAN: Kirim order_id ke halaman status
-                        // ============================================================
-                        window.location.href = `${paymentStatusUrlBase}?status=success&order_id=${dbOrderId}&message=${encodeURIComponent('Pembayaran berhasil!')}`; 
+                        paymentHandled = true;
+                        // Redirect ke profile dengan flag untuk polling
+                        window.location.href = `${profileUrl}&payment_pending=${dbOrderId}`;
                     },
                     onPending: function(res){
-                        paymentHandled = true; // Set flag
-                        window.location.href = `${paymentStatusUrlBase}?status=pending&order_id=${dbOrderId}&message=${encodeURIComponent('Selesaikan pembayaran Anda.')}`; 
+                        paymentHandled = true;
+                        window.location.href = `${profileUrl}&payment_pending=${dbOrderId}`;
                     },
                     onError: function(res){
-                        paymentHandled = true; // Set flag
-                        window.location.href = `${paymentStatusUrlBase}?status=error&order_id=${dbOrderId}&message=${encodeURIComponent('Pembayaran gagal, silakan coba lagi.')}`; 
+                        paymentHandled = true;
+                        sessionStorage.removeItem('pending_order_id');
+                        window.location.href = `${paymentStatusUrlBase}?status=error&order_id=${dbOrderId}&message=${encodeURIComponent('Pembayaran gagal, silakan coba lagi.')}`;
                     },
                     onClose: function(){
                         if (!paymentHandled) { 
                             loadingOverlay.classList.add('opacity-0', 'pointer-events-none');
                             submitButton.disabled = false;
                             submitButton.innerHTML = 'Lanjutkan ke Pembayaran';
+                            sessionStorage.removeItem('pending_order_id');
                         }
                     }
                 });

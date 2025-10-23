@@ -1,6 +1,7 @@
 <?php
 // File: profile/profile.php
-// Versi Final dengan Navigasi Horizontal, Status Diproses, Fokus Alamat Utama, Styling Card, dan Action Handler Terpisah
+// PERBAIKAN: Menambahkan "Benteng Pertahanan Terakhir"
+// Cek status otomatis saat halaman dimuat.
 
 require_once '../config/config.php';
 require_once '../sistem/sistem.php';
@@ -13,10 +14,9 @@ $user_id = $_SESSION['user_id'];
 $user_data = get_user_by_id($conn, $user_id);
 $active_tab = $_GET['tab'] ?? 'orders';
 
-// Logika pembatalan pesanan (Tetap di sini karena melibatkan redirect spesifik)
+// Logika pembatalan pesanan
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['action'] === 'cancel_order') {
     $order_id_to_cancel = (int)($_POST['order_id'] ?? 0);
-
     if ($order_id_to_cancel > 0) {
         $conn->begin_transaction();
         try {
@@ -26,27 +26,22 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
             $order_status_result = $stmt_check->get_result();
             $order_data_check = $order_status_result->fetch_assoc();
             $stmt_check->close();
-
             if (!$order_data_check) throw new Exception("Pesanan tidak ditemukan.");
             if ($order_data_check['status'] !== 'waiting_payment') throw new Exception("Pesanan ini tidak dapat dibatalkan.");
-
             $stmt_items = $conn->prepare("SELECT product_id, quantity FROM order_items WHERE order_id = ?");
             $stmt_items->bind_param("i", $order_id_to_cancel);
             $stmt_items->execute();
             $items = $stmt_items->get_result()->fetch_all(MYSQLI_ASSOC);
             $stmt_items->close();
-
             $stmt_restock = $conn->prepare("UPDATE products SET stock = stock + ? WHERE id = ?");
             foreach ($items as $item) {
                 $stmt_restock->bind_param("ii", $item['quantity'], $item['product_id']);
                 $stmt_restock->execute();
             }
             $stmt_restock->close();
-
             $stmt_cancel = $conn->prepare("UPDATE orders SET status = 'cancelled' WHERE id = ? AND user_id = ?");
             $stmt_cancel->bind_param("ii", $order_id_to_cancel, $user_id);
             $stmt_cancel->execute();
-
             if ($stmt_cancel->affected_rows > 0) {
                 $conn->commit();
                 set_flashdata('success', 'Pesanan berhasil dibatalkan.');
@@ -54,7 +49,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                 throw new Exception("Gagal update status pesanan.");
             }
             $stmt_cancel->close();
-
         } catch (Exception $e) {
             $conn->rollback();
             set_flashdata('error', 'Gagal membatalkan: ' . $e->getMessage());
@@ -71,7 +65,6 @@ $addresses = [];
 $notifications = [];
 
 if ($active_tab === 'orders') {
-    // Query tetap sama, styling akan diubah di HTML
      $stmt_orders = $conn->prepare("
         SELECT o.*, oi.product_id, oi.quantity, oi.price AS item_price, p.name AS product_name, p.image AS product_image
         FROM orders o
@@ -88,7 +81,7 @@ if ($active_tab === 'orders') {
         $order_id = $row['id'];
         if (!isset($order_items_grouped[$order_id])) {
             $order_items_grouped[$order_id] = [
-                'details' => [ // Simpan detail order sekali saja
+                'details' => [
                     'id' => $row['id'],
                     'order_number' => $row['order_number'],
                     'total' => $row['total'],
@@ -100,11 +93,9 @@ if ($active_tab === 'orders') {
                     'province' => $row['province'],
                     'postal_code' => $row['postal_code'],
                     'phone_number' => $row['phone_number'],
-                ],
-                'items' => [] // Array untuk menyimpan items
+                ], 'items' => []
             ];
         }
-        // Tambahkan item jika ada
         if ($row['product_id']) {
             $order_items_grouped[$order_id]['items'][] = [
                 'product_id' => $row['product_id'],
@@ -115,7 +106,7 @@ if ($active_tab === 'orders') {
             ];
         }
     }
-    $orders = array_values($order_items_grouped); // Ubah kembali ke array biasa
+    $orders = array_values($order_items_grouped);
     $stmt_orders->close();
 } elseif ($active_tab === 'addresses') {
     $addresses = get_user_addresses($conn, $user_id);
@@ -135,7 +126,7 @@ $page_title = "Profil Saya";
 <html lang="id">
 <?php page_head($page_title . ' - ' . get_setting($conn, 'store_name'), $conn); ?>
 <script type="text/javascript"
-        src="https://app.sandbox.midtrans.com/snap/snap.js"
+        src="https://app.sandbox.midtrans.com/snap/snap.js?v=<?= time() ?>"
         data-client-key="<?= htmlspecialchars(\Midtrans\Config::$clientKey); ?>"></script>
 <body class="bg-gray-100">
 
@@ -146,7 +137,7 @@ $page_title = "Profil Saya";
 <?php navbar($conn); ?>
 
 <main class="container mx-auto px-4 py-8">
-    <div class="mb-6">
+    <div class="mb-6" id="flash-message-container">
         <?php flash_message(); ?>
     </div>
 
@@ -185,21 +176,21 @@ $page_title = "Profil Saya";
             <?php else: ?>
             <div class="space-y-6">
                 <?php foreach ($orders as $order_group):
-                    $order = $order_group['details']; // Ambil detail order
-                    $items = $order_group['items']; // Ambil items
+                    $order = $order_group['details'];
+                    $items = $order_group['items'];
                     $dt = new DateTime($order['created_at']);
                     $formatted_date = $dt->format('d M Y, H:i');
                     $status_class = get_admin_status_class($order['status']);
                     $status_text = ($order['status'] === 'belum_dicetak') ? 'Diproses' : ucfirst(str_replace('_', ' ', $order['status']));
                 ?>
-                <div class="border border-gray-200 rounded-xl overflow-hidden shadow-sm hover:shadow-lg transition-shadow duration-300 bg-white">
+                <div id="order-block-<?= $order['id'] ?>" class="border border-gray-200 rounded-xl overflow-hidden shadow-sm hover:shadow-lg transition-shadow duration-300 bg-white">
                     <div class="bg-gradient-to-r from-gray-50 to-gray-100 p-4 flex flex-col sm:flex-row justify-between items-start sm:items-center border-b border-gray-200">
                         <div>
                             <p class="font-semibold text-indigo-700 text-sm sm:text-base">Pesanan #<?= htmlspecialchars($order['order_number']) ?></p>
                             <p class="text-xs sm:text-sm text-gray-500 mt-1"><i class="far fa-clock mr-1"></i><?= $formatted_date ?> WIB</p>
                         </div>
                         <div class="mt-2 sm:mt-0 flex flex-col sm:items-end gap-1 text-right">
-                             <span class="text-xs sm:text-sm font-medium px-3 py-1 rounded-full <?= $status_class ?> shadow-xs"><?= htmlspecialchars($status_text) ?></span>
+                             <span id="order-status-<?= $order['id'] ?>" class="text-xs sm:text-sm font-medium px-3 py-1 rounded-full <?= $status_class ?> shadow-xs"><?= htmlspecialchars($status_text) ?></span>
                             <p class="font-bold text-base sm:text-lg text-gray-800 mt-1"><?= format_rupiah($order['total']) ?></p>
                         </div>
                     </div>
@@ -228,12 +219,16 @@ $page_title = "Profil Saya";
                             <p><i class="fas fa-user mr-1.5 text-gray-400"></i><?= htmlspecialchars($order['full_name']) ?> <span class="text-gray-400 mx-1">|</span> <i class="fas fa-phone-alt mr-1.5 text-gray-400"></i><?= htmlspecialchars($order['phone_number']) ?></p>
                             <p><i class="fas fa-map-marker-alt mr-1.5 text-gray-400"></i><?= htmlspecialchars($order['address_line_1']) ?>, <?= htmlspecialchars($order['city']) ?>, <?= htmlspecialchars($order['province']) ?> <?= htmlspecialchars($order['postal_code']) ?></p>
                         </div>
-                        <div class="flex gap-2 w-full sm:w-auto mt-3 sm:mt-0 flex-shrink-0">
+                        
+                        <div id="order-controls-<?= $order['id'] ?>" class="flex gap-2 w-full sm:w-auto mt-3 sm:mt-0 flex-shrink-0">
+                            
                             <?php if ($order['status'] === 'waiting_payment'): ?>
+                            <!-- Tombol Bayar (Akan dihapus oleh JS) -->
                             <button data-order-id="<?= $order['id'] ?>" class="pay-now-button flex-1 sm:flex-none text-xs sm:text-sm bg-gradient-to-r from-green-500 to-green-600 hover:from-green-600 hover:to-green-700 text-white font-bold py-2 px-4 rounded-lg shadow-md hover:shadow-lg transform hover:-translate-y-0.5 transition duration-150">
                                 <i class="fas fa-credit-card mr-1"></i> Bayar
                             </button>
-                            <form method="POST" onsubmit="return confirm('Apakah Anda yakin ingin membatalkan pesanan ini? Stok akan dikembalikan.')" class="flex-1 sm:flex-none">
+                            <!-- Form Batal (Akan dihapus oleh JS) -->
+                            <form method="POST" onsubmit="return confirm('Apakah Anda yakin ingin membatalkan pesanan ini? Stok akan dikembalikan.')" class="cancel-form flex-1 sm:flex-none">
                                 <input type="hidden" name="action" value="cancel_order">
                                 <input type="hidden" name="order_id" value="<?= $order['id'] ?>">
                                 <button type="submit" class="w-full text-xs sm:text-sm bg-gradient-to-r from-red-500 to-red-600 hover:from-red-600 hover:to-red-700 text-white font-bold py-2 px-4 rounded-lg shadow-md hover:shadow-lg transform hover:-translate-y-0.5 transition duration-150">
@@ -241,12 +236,17 @@ $page_title = "Profil Saya";
                                 </button>
                             </form>
                             <?php endif; ?>
-                             <!-- Tambahkan tombol Invoice jika status memungkinkan -->
-                            <?php if (!in_array($order['status'], ['waiting_payment', 'cancelled'])): ?>
-                                <a href="<?= BASE_URL ?>/checkout/invoice.php?order_id=<?= urlencode(encode_id($order['id'])) ?>" target="_blank" class="flex-1 sm:flex-none text-xs sm:text-sm text-center bg-gradient-to-r from-blue-500 to-blue-600 hover:from-blue-600 hover:to-blue-700 text-white font-bold py-2 px-4 rounded-lg shadow-md hover:shadow-lg transform hover:-translate-y-0.5 transition duration-150">
-                                    <i class="fas fa-receipt mr-1"></i> Invoice
-                                </a>
-                            <?php endif; ?>
+                             
+                            <!-- Tombol Invoice (Akan ditampilkan oleh JS jika sukses) -->
+                            <a id="invoice-btn-<?= $order['id'] ?>"
+                               href="<?= BASE_URL ?>/checkout/invoice.php?order_id=<?= urlencode(encode_id($order['id'])) ?>" 
+                               target="_blank" 
+                               class="flex-1 sm:flex-none text-xs sm:text-sm text-center bg-gradient-to-r from-blue-500 to-blue-600 hover:from-blue-600 hover:to-blue-700 text-white font-bold py-2 px-4 rounded-lg shadow-md hover:shadow-lg transform hover:-translate-y-0.5 transition duration-150"
+                               <?php if (in_array($order['status'], ['waiting_payment', 'cancelled'])): ?>
+                               style="display:none;" 
+                               <?php endif; ?>>
+                                <i class="fas fa-receipt mr-1"></i> Invoice
+                            </a>
                         </div>
                     </div>
                 </div>
@@ -263,8 +263,6 @@ $page_title = "Profil Saya";
                     <i class="fas fa-plus mr-1"></i> Tambah Baru
                 </button>
             </div>
-
-            <!-- Form Tambah/Edit Alamat (Defaultnya tersembunyi) -->
             <div id="add-address-form" class="hidden mb-8 p-5 border rounded-lg bg-gray-50 transition-all duration-300 ease-in-out max-h-0 opacity-0 overflow-hidden shadow-inner">
                 <h3 class="font-semibold mb-4 text-lg text-gray-700">Tambah Alamat Baru</h3>
                 <form action="<?= BASE_URL ?>/profile/process_actions.php" method="POST">
@@ -289,8 +287,6 @@ $page_title = "Profil Saya";
                     </div>
                 </form>
             </div>
-
-            <!-- Daftar Alamat Tersimpan -->
             <?php if (empty($addresses)): ?>
             <p class="text-gray-500 text-center py-10">Anda belum menambahkan alamat.</p>
             <?php else: ?>
@@ -306,8 +302,6 @@ $page_title = "Profil Saya";
                         <?php endif; ?>
                     </div>
                     <div class="flex gap-3 flex-shrink-0 ml-4 mt-1">
-                        <!-- Tombol Edit (belum diimplementasikan) -->
-                        <!-- <button title="Edit" class="text-blue-500 hover:text-blue-700"><i class="fas fa-edit"></i></button> -->
                         <form action="<?= BASE_URL ?>/profile/process_actions.php" method="POST" onsubmit="return confirm('Yakin ingin menghapus alamat ini?')" class="inline">
                             <input type="hidden" name="action" value="delete_address">
                             <input type="hidden" name="address_id" value="<?= $addr['id'] ?>">
@@ -332,7 +326,7 @@ $page_title = "Profil Saya";
         <div class="bg-white p-6 rounded-lg shadow-md">
              <div class="flex justify-between items-center mb-6 border-b pb-4">
                  <h1 class="text-2xl font-bold text-gray-800">Notifikasi</h1>
-                 <?php if (!empty($notifications) && array_filter($notifications, fn($n) => !$n['is_read'])): // Cek jika ada notif belum dibaca ?>
+                 <?php if (!empty($notifications) && array_filter($notifications, fn($n) => !$n['is_read'])): ?>
                     <form method="POST" action="<?= BASE_URL ?>/notification/mark_all_read.php">
                         <button type="submit" class="text-sm text-indigo-600 hover:underline font-medium">Tandai semua dibaca</button>
                     </form>
@@ -349,7 +343,6 @@ $page_title = "Profil Saya";
                 <li class="border-b border-gray-100 pb-3 last:border-b-0 <?= !$notif['is_read'] ? ' p-3 rounded-md bg-indigo-50' : 'p-3' ?>">
                     <p class="text-sm text-gray-800 <?= !$notif['is_read'] ? 'font-semibold' : '' ?>"><?= htmlspecialchars($notif['message']) ?></p>
                     <p class="text-xs text-gray-400 mt-1.5"><?= $notif_date ?> WIB</p>
-                    <!-- Link jika perlu -->
                 </li>
                 <?php endforeach; ?>
             </ul>
@@ -361,9 +354,6 @@ $page_title = "Profil Saya";
             <h1 class="text-2xl font-bold mb-6 text-gray-800 border-b pb-4">Pengaturan Akun</h1>
             <form action="<?= BASE_URL ?>/profile/process_actions.php" method="POST">
                 <input type="hidden" name="action" value="update_profile">
-                <!-- Tambahkan CSRF Token jika ada -->
-                <!-- <input type="hidden" name="csrf_token" value="<?php // echo generate_csrf_token(); ?>"> -->
-
                 <div class="mb-5">
                     <label for="name" class="block text-sm font-medium text-gray-700 mb-1">Nama</label>
                     <input type="text" id="name" name="name" value="<?= htmlspecialchars($user_data['name']) ?>" class="w-full p-2 border border-gray-300 rounded-md focus:ring-indigo-500 focus:border-indigo-500 shadow-sm" required>
@@ -373,9 +363,7 @@ $page_title = "Profil Saya";
                     <input type="email" id="email" name="email" value="<?= htmlspecialchars($user_data['email']) ?>" class="w-full p-2 border border-gray-300 rounded-md bg-gray-100 cursor-not-allowed focus:outline-none focus:ring-0 focus:border-gray-300" readonly disabled>
                     <p class="text-xs text-gray-500 mt-1">Email tidak dapat diubah.</p>
                 </div>
-
                 <hr class="my-8 border-gray-200">
-
                 <h3 class="text-xl font-semibold mb-4 text-gray-800">Ubah Password</h3>
                 <p class="text-sm text-gray-500 mb-5">Kosongkan field password jika Anda tidak ingin mengubahnya.</p>
                 <div class="mb-4">
@@ -406,13 +394,193 @@ $page_title = "Profil Saya";
 document.addEventListener('DOMContentLoaded', function() {
     const payButtons = document.querySelectorAll('.pay-now-button');
     const loadingOverlay = document.getElementById('loading-overlay');
-    // ====================================================================
-    // INI BAGIAN PENTINGNYA (di profile.php)
-    // ====================================================================
-    const paymentStatusUrlBase = '<?= BASE_URL ?>/checkout/payment_status.php'; // URL Halaman Notifikasi
-    // ====================================================================
+    const loadingOverlayText = loadingOverlay.querySelector('p');
+    const flashContainer = document.getElementById('flash-message-container');
+
+    // ============================================================
+    // FUNGSI JAVASCRIPT REAL-TIME (VERSI PALING BARU)
+    // ============================================================
+
+    /**
+     * Menampilkan notifikasi flash message buatan di atas halaman.
+     */
+    function injectFlashMessage(type, message) {
+        if (!flashContainer) return;
+        let icon_class = 'fa-info-circle';
+        let color_class = 'text-blue-500';
+        let border_color = 'border-blue-500';
+        if (type === 'success') {
+            icon_class = 'fa-check-circle';
+            color_class = 'text-green-500';
+            border_color = 'border-green-500';
+        } else if (type === 'error') {
+            icon_class = 'fa-times-circle';
+            color_class = 'text-red-500';
+            border_color = 'border-red-500';
+        }
+        const flashId = 'flashdata-' + new Date().getTime();
+        const flashHTML = `
+        <div id="${flashId}" class="fixed top-5 right-5 z-50 p-4 rounded-lg shadow-lg bg-white ${border_color} border-l-4 flex items-center" style="opacity: 0; transform: translateX(100%); transition: opacity 0.5s, transform 0.5s;">
+            <i class="fas ${icon_class} ${color_class} text-2xl mr-3"></i>
+            <div>
+                <p class="font-semibold text-gray-800">${type.charAt(0).toUpperCase() + type.slice(1)}</p>
+                <p class="text-sm text-gray-600">${message}</p>
+            </div>
+        </div>`;
+        const oldFlash = document.getElementById('flashdata');
+        if(oldFlash) oldFlash.remove();
+        document.body.insertAdjacentHTML('beforeend', flashHTML);
+        setTimeout(() => {
+            const el = document.getElementById(flashId);
+            if (el) {
+                el.style.opacity = '1';
+                el.style.transform = 'translateX(0)';
+            }
+        }, 100);
+        setTimeout(() => {
+            const el = document.getElementById(flashId);
+            if (el) {
+                el.style.opacity = '0';
+                el.style.transform = 'translateX(100%)';
+                setTimeout(() => el.remove(), 500);
+            }
+        }, 4000);
+    }
+    
+    /**
+     * Memperbarui tampilan order di halaman secara real-time.
+     */
+    function updateOrderOnPage(orderId) {
+        const statusBadge = document.getElementById(`order-status-${orderId}`);
+        const controlsContainer = document.getElementById(`order-controls-${orderId}`);
+        
+        if (statusBadge) {
+            statusBadge.textContent = 'Diproses';
+            statusBadge.classList.remove('bg-orange-100', 'text-orange-800');
+            statusBadge.classList.add('bg-cyan-100', 'text-cyan-800');
+        }
+        
+        if (controlsContainer) {
+            const payButton = controlsContainer.querySelector('.pay-now-button');
+            if (payButton) payButton.remove();
+            
+            const cancelForm = controlsContainer.querySelector('.cancel-form');
+            if (cancelForm) cancelForm.remove();
+            
+            const invoiceButton = document.getElementById(`invoice-btn-${orderId}`);
+            if (invoiceButton) {
+                invoiceButton.style.display = 'inline-flex'; 
+            }
+        }
+    }
+
+    /**
+     * Memulai polling untuk status order. (Dipakai oleh Tombol Bayar)
+     */
+    function pollForStatus(orderId) {
+        let attempts = 0;
+        const maxAttempts = 15; // 30 detik
+        const pollCheckUrl = '<?= BASE_URL ?>/checkout/check_payment_status.php';
+
+        if(loadingOverlayText) {
+            loadingOverlayText.innerHTML = '<i class="fas fa-spinner fa-spin mr-3"></i>Memverifikasi pembayaran...';
+        }
+        loadingOverlay.classList.remove('opacity-0', 'pointer-events-none');
+
+        const intervalId = setInterval(async () => {
+            attempts++;
+            if (attempts > maxAttempts) {
+                clearInterval(intervalId);
+                loadingOverlay.classList.add('opacity-0', 'pointer-events-none');
+                injectFlashMessage('error', 'Gagal memverifikasi. Silakan refresh halaman.');
+                return;
+            }
+
+            try {
+                const cacheBustedUrl = new URL(pollCheckUrl);
+                cacheBustedUrl.searchParams.set('_t', new Date().getTime());
+                const formData = new FormData();
+                formData.append('order_id', orderId);
+
+                const response = await fetch(cacheBustedUrl, { 
+                    method: 'POST', 
+                    body: formData,
+                    headers: { 'Cache-Control': 'no-cache' }
+                });
+                const data = await response.json();
+
+                if (data.success && data.order_status === 'belum_dicetak') {
+                    clearInterval(intervalId);
+                    updateOrderOnPage(orderId); // Panggil fungsi DOM update
+                    loadingOverlay.classList.add('opacity-0', 'pointer-events-none');
+                    injectFlashMessage('success', 'Pembayaran berhasil! Status telah diperbarui.');
+                }
+            } catch (error) {
+                console.error('Polling error:', error);
+            }
+        }, 2000); // Poll setiap 2 detik
+    }
+
+    // ============================================================
+    // PERBAIKAN: "BENTENG PERTAHANAN TERAKHIR"
+    // Cek status semua order 'waiting_payment' saat halaman di-load
+    // ============================================================
+    async function verifyOrderStatusOnLoad(orderId) {
+        try {
+            const pollCheckUrl = '<?= BASE_URL ?>/checkout/check_payment_status.php';
+            const cacheBustedUrl = new URL(pollCheckUrl);
+            cacheBustedUrl.searchParams.set('_t', new Date().getTime());
+            
+            const formData = new FormData();
+            formData.append('order_id', orderId);
+
+            const response = await fetch(cacheBustedUrl, { 
+                method: 'POST', 
+                body: formData,
+                headers: { 'Cache-Control': 'no-cache' }
+            });
+            const data = await response.json();
+
+            if (data.success && data.order_status === 'belum_dicetak') {
+                // Status di DB sudah 'belum_dicetak', tapi PHP render 'waiting'.
+                // Paksa update tampilan!
+                console.log(`Benteng Pertahanan: Order ${orderId} seharusnya 'belum_dicetak'. Memperbarui UI...`);
+                updateOrderOnPage(orderId); // Panggil fungsi DOM update yang sudah ada
+            } else if (data.success && data.order_status === 'cancelled') {
+                // Jika ordernya batal, reload halaman untuk membersihkannya
+                console.log(`Benteng Pertahanan: Order ${orderId} ternyata 'cancelled'. Reloading...`);
+                window.location.href = '<?= BASE_URL ?>/profile/profile.php?tab=orders';
+            }
+            // Jika status masih 'waiting_payment', tidak perlu lakukan apa-apa. Tampilannya sudah benar.
+
+        } catch (error) {
+            console.error(`Gagal verifikasi order ${orderId} saat load:`, error);
+        }
+    }
+
+    // Jalankan verifikasi untuk setiap tombol "Bayar" yang ada di halaman
+    if (payButtons.length > 0) {
+        // Cek notifikasi dari URL (jika baru redirect dari checkout)
+        const urlParams = new URLSearchParams(window.location.search);
+        const justPaid = urlParams.get('just_paid'); // Kita akan tambahkan ini di checkout.php nanti
+
+        // Beri jeda 500ms untuk membiarkan DB konsisten setelah redirect
+        setTimeout(() => {
+            console.log(`Benteng Pertahanan: Ditemukan ${payButtons.length} order 'waiting_payment'. Memverifikasi...`);
+            payButtons.forEach(button => {
+                const orderId = button.dataset.orderId;
+                if (orderId) {
+                    verifyOrderStatusOnLoad(orderId);
+                }
+            });
+        }, 500); // Jeda 0.5 detik
+    }
+    // ============================================================
+    // AKHIR DARI "BENTENG PERTAHANAN TERAKHIR"
+    // ============================================================
 
 
+    // Logika untuk tombol "Bayar" yang ada di halaman
     payButtons.forEach(button => {
         button.addEventListener('click', function() {
             const orderId = this.dataset.orderId;
@@ -421,6 +589,9 @@ document.addEventListener('DOMContentLoaded', function() {
     });
 
     async function payOrder(orderId, payButton) {
+        if(loadingOverlayText) {
+            loadingOverlayText.innerHTML = '<i class="fas fa-spinner fa-spin mr-3"></i>Mempersiapkan pembayaran...';
+        }
         loadingOverlay.classList.remove('opacity-0', 'pointer-events-none');
         if(payButton) payButton.disabled = true;
 
@@ -429,26 +600,43 @@ document.addEventListener('DOMContentLoaded', function() {
             formData.append('order_id', orderId);
             const response = await fetch('<?= BASE_URL ?>/checkout/get_snap_token.php', { method: 'POST', body: formData });
             const result = await response.json();
+            
             if (result.success && result.snap_token) {
-                loadingOverlay.classList.add('opacity-0', 'pointer-events-none');
+                let finalStatus = null;
+                let dbOrderId = result.db_order_id;
                 
-                // ====================================================================
-                // INI ADALAH LOGIKA REDIRECT YANG SEBENARNYA
-                // ====================================================================
                 window.snap.pay(result.snap_token, {
-                    onSuccess: function(res){ window.location.href = `${paymentStatusUrlBase}?status=success&message=${encodeURIComponent('Pembayaran berhasil!')}`; },
-                    onPending: function(res){ window.location.href = `${paymentStatusUrlBase}?status=pending&message=${encodeURIComponent('Selesaikan pembayaran Anda.')}`; },
-                    onError: function(res){ window.location.href = `${paymentStatusUrlBase}?status=error&message=${encodeURIComponent('Pembayaran gagal, silakan coba lagi.')}`; },
+                    onSuccess: function(res){
+                        finalStatus = 'success';
+                    },
+                    onPending: function(res){
+                        finalStatus = 'pending';
+                    },
+                    onError: function(res){
+                        finalStatus = 'error';
+                    },
                     onClose: function(){
                         loadingOverlay.classList.add('opacity-0', 'pointer-events-none');
-                        if(payButton) payButton.disabled = false;
-                        // Tidak perlu redirect onClose di sini, biarkan user tetap di profile
+                        if (finalStatus === 'success') {
+                            pollForStatus(dbOrderId); // Panggil polling
+                        } else if (finalStatus === 'pending') {
+                            injectFlashMessage('info', 'Selesaikan pembayaran Anda.');
+                            if(payButton) payButton.disabled = false;
+                        } else if (finalStatus === 'error') {
+                            injectFlashMessage('error', 'Pembayaran gagal, silakan coba lagi.');
+                            if(payButton) payButton.disabled = false;
+                        } else {
+                            if(payButton) payButton.disabled = false;
+                        }
                     }
                 });
-                // ====================================================================
-
-            } else { throw new Error(result.message || 'Gagal memulai sesi pembayaran.'); }
+            } else { 
+                throw new Error(result.message || 'Gagal memulai sesi pembayaran.'); 
+            }
         } catch (error) {
+            if(loadingOverlayText) {
+                loadingOverlayText.innerHTML = '<i class="fas fa-spinner fa-spin mr-3"></i>Mempersiapkan pembayaran...';
+            }
             loadingOverlay.classList.add('opacity-0', 'pointer-events-none');
             if(payButton) payButton.disabled = false;
             alert('Terjadi kesalahan: ' + error.message);
@@ -456,11 +644,10 @@ document.addEventListener('DOMContentLoaded', function() {
     }
 });
 
-// Fungsi untuk toggle form tambah alamat
+// Fungsi toggle form alamat (tidak diubah)
 function toggleAddAddressForm() {
     const form = document.getElementById('add-address-form');
     const isHidden = form.classList.contains('hidden');
-
     if (isHidden) {
         form.classList.remove('hidden');
         requestAnimationFrame(() => {
@@ -480,7 +667,7 @@ function toggleAddAddressForm() {
         form.style.padding = '0';
         setTimeout(() => {
             form.classList.add('hidden');
-        }, 300); 
+        }, 300);
     }
 }
 </script>

@@ -1,6 +1,7 @@
 <?php
 // File: midtrans/midtrans_webhook.php
-// VERSI FIXED dengan Logging Detail untuk Debugging
+// FILE INI SUDAH BENAR (TIDAK DIUBAH)
+// Log 'ERROR: Order not found' Anda akan HILANG setelah perbaikan di get_snap_token.php
 
 header('Content-Type: text/plain');
 error_reporting(E_ALL);

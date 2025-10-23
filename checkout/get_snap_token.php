@@ -1,6 +1,6 @@
 <?php
 // File: checkout/get_snap_token.php
-// Updated: Untuk fitur Lanjut Bayar dengan check status
+// PERBAIKAN: Menambahkan (string) pada 'id' di item_details
 
 error_reporting(0);
 header('Content-Type: application/json');
@@ -50,24 +50,24 @@ try {
     $stmt_last_attempt->close();
 
     if ($last_attempt && !empty($last_attempt['snap_token'])) {
-        $conn->commit();
-        echo json_encode([
-            'success' => true, 
-            'snap_token' => $last_attempt['snap_token'],
-            'order_id' => $last_attempt['attempt_order_number'],
-            'db_order_id' => $order_id
-        ]);
-        exit;
+        try {
+            $status = \Midtrans\Transaction::status($last_attempt['attempt_order_number']);
+            if ($status->transaction_status == 'pending') {
+                $conn->commit();
+                echo json_encode([
+                    'success' => true, 
+                    'snap_token' => $last_attempt['snap_token'],
+                    'order_id' => $last_attempt['attempt_order_number'],
+                    'db_order_id' => $order_id
+                ]);
+                exit;
+            }
+        } catch (Exception $e) {
+            // Token expired atau invalid, lanjut buat baru
+        }
     }
 
-    $stmt_count = $conn->prepare("SELECT COUNT(id) as attempt_count FROM payment_attempts WHERE order_id = ?");
-    $stmt_count->bind_param("i", $order_id);
-    $stmt_count->execute();
-    $attempt_count = (int)$stmt_count->get_result()->fetch_assoc()['attempt_count'];
-    $stmt_count->close();
-    
-    $new_attempt_number = $attempt_count + 1;
-    $attempt_order_number = $order_data['order_number'] . '-' . $new_attempt_number;
+    $attempt_order_number = $order_data['order_number'] . '-T' . time();
 
     $order_items = get_order_items_with_details($conn, $order_id);
     if (empty($order_items)) {
@@ -76,8 +76,11 @@ try {
     
     $midtrans_items = [];
     foreach ($order_items as $item) {
+        // ============================================================
+        // INI ADALAH PERBAIKANNYA
+        // ============================================================
         $midtrans_items[] = [
-            'id' => $item['product_id'], 
+            'id' => (string)$item['product_id'], // WAJIB (string)
             'price' => (int)$item['price'], 
             'quantity' => (int)$item['quantity'], 
             'name' => $item['name']
@@ -119,3 +122,4 @@ try {
     echo json_encode(['success' => false, 'message' => 'Gagal membuat sesi pembayaran: ' . $e->getMessage()]);
     exit;
 }
+?>

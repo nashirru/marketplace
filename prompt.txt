@@ -1,0 +1,84 @@
+Bagian 1: Apa yang Anda Inginkan (Tujuan Anda)
+Berdasarkan percakapan kita, ini adalah alur yang Anda inginkan:
+
+Anda klik "Lanjutkan ke Pembayaran" di checkout.php.
+
+Popup Midtrans muncul.
+
+Anda menyelesaikan pembayaran (misal: scan QRIS).
+
+Popup Midtrans tertutup.
+
+Anda langsung diarahkan ke halaman payment_status.php.
+
+Halaman payment_status.php ini menampilkan "Pembayaran Berhasil!" (bukan "Menunggu Pembayaran").
+
+Setelah 5 detik, halaman ini otomatis mengarahkan Anda ke profile.php.
+
+Saat tiba di profile.php, status pesanan Anda sudah "Diproses" (belum_dicetak), tanpa perlu me-refresh halaman.
+
+Bagian 2: Apa yang Terjadi (Masalah Saat Ini)
+Anda bayar, popup tertutup.
+
+Anda langsung diarahkan ke profile.php, melewatkan halaman payment_status.php.
+
+Di profile.php, status pesanan masih "Waiting Payment".
+
+Anda harus me-refresh halaman profile.php secara manual agar statusnya berubah menjadi "Diproses".
+
+Bagian 3: Penjelasan Kenapa Ini Terjadi
+Masalah #1: Kenapa Langsung ke profile.php? (Ini Masalah Cache Browser)
+Ini adalah masalah utama Anda.
+
+Browser Anda (Google Chrome/Firefox) sangat "pintar" dan menyimpan file checkout.php versi lama di memori (ini disebut caching).
+
+Di file checkout.php versi lama (yang saya berikan beberapa waktu lalu), ada bug di fungsi onClose (fungsi yang berjalan saat popup ditutup). Bug itu adalah: onClose langsung memerintahkan browser pindah ke profile.php.
+
+Saat Anda bayar, dua perintah berjalan hampir bersamaan:
+
+onSuccess (sukses) berkata: "Pindah ke payment_status.php!"
+
+onClose (popup ditutup) berkata: "Pindah ke profile.php!"
+
+Perintah onClose ini "kalah balapan" atau berjalan belakangan, sehingga membatalkan perintah onSuccess. Itulah mengapa Anda selalu berakhir di profile.php.
+
+Solusi untuk Masalah #1: File checkout.php yang saya berikan terakhir (di riwayat chat) sudah memperbaiki ini. Fungsi onClose-nya sudah diubah agar tidak pindah halaman jika pembayaran sukses. Masalahnya, browser Anda tidak memakai file baru itu.
+
+Anda harus memaksa browser Anda membuang file lama itu.
+
+Masalah #2: Kenapa Statusnya "Waiting Payment"? (Ini Masalah Waktu)
+Ini adalah masalah yang Anda sadari: "lalu harus refresh agar statusnya update".
+
+Ini terjadi karena ada dua alur yang "balapan" (Race Condition):
+
+Alur 1 (Perjalanan Anda):
+
+Anda bayar.
+
+onSuccess berjalan.
+
+Browser mengarahkan Anda ke halaman baru.
+
+(Total Waktu: Sekitar 1 detik)
+
+Alur 2 (Perjalanan Server/Webhook):
+
+Anda bayar.
+
+Server Midtrans mengirim sinyal (webhook) ke server Anda (ke file midtrans_webhook.php).
+
+File midtrans_webhook.php menerima sinyal dan meng-update status di database (dari "Waiting Payment" -> "belum_dicetak").
+
+(Total Waktu: Sekitar 2-5 detik)
+
+Lihat? Anda (Alur 1) sampai di halaman payment_status.php LEBIH CEPAT daripada server (Alur 2) selesai meng-update database.
+
+Solusi untuk Masalah #2: Inilah gunanya file payment_status.php yang saat ini ada di editor Anda (yang berjudul "Halaman Polling Cerdas").
+
+File itu sengaja menampilkan "Mengonfirmasi Pembayaran..." saat Anda tiba.
+
+Lalu, ia akan mengecek database setiap 2 detik (ini namanya "polling").
+
+Begitu ia melihat status di database berubah (karena webhook dari Alur 2 akhirnya sampai), ia akan otomatis mengubah tampilan di layar Anda menjadi "Pembayaran Berhasil!".
+
+Baru setelah itu ia akan memulai hitung mundur 5 detik dan mengarahkan Anda ke profile.php.

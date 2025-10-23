@@ -1,5 +1,6 @@
 <?php
 // File: sistem/sistem.php
+// FILE INI TIDAK DIUBAH SESUAI PERMINTAAN ANDA
 
 if (session_status() == PHP_SESSION_NONE) {
     session_start();
