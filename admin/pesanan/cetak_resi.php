@@ -1,10 +1,11 @@
 <?php
-// File: admin/pesanan/cetak_resi_dompdf.php
-// Versi ini menggunakan Dompdf untuk hasil render HTML & CSS yang lebih baik.
+// File: admin/pesanan/cetak_resi.php
+// Versi ini menggunakan Dompdf DAN menangani update status otomatis.
 
 // Sertakan file konfigurasi, sistem, dan autoloader Dompdf
 include '../../config/config.php';
 include '../../sistem/sistem.php';
+// Pastikan path ke vendor/autoload.php sudah benar
 require_once dirname(__DIR__, 2) . '/vendor/autoload.php';
 
 use Dompdf\Dompdf;
@@ -18,41 +19,116 @@ load_settings($conn);
 $store_name = get_setting($conn, 'store_name') ?? 'Warok Kite';
 $store_phone = get_setting($conn, 'store_phone') ?? '-';
 
-// --- LOGIKA PENGAMBILAN DATA PESANAN ---
+// --- LOGIKA BARU: PENANGANAN AKSI DAN UPDATE STATUS ---
+$action = $_GET['action'] ?? null;
+$order_id = (int)($_GET['order_id'] ?? 0);
+$status = $_GET['status'] ?? null; // Untuk kompatibilitas link lama
+
 $orders_to_print = [];
+$order_ids_to_update = []; // Kumpulan ID yang akan di-update statusnya
 $filename = 'resi_pengiriman.pdf';
 
-if (isset($_GET['status']) && $_GET['status'] == 'belum_dicetak') {
+$sql_where = "";
+$sql_params = [];
+$sql_types = "";
+
+// 1. TENTUKAN DATA YANG AKAN DIAMBIL BERDASARKAN PARAMETER
+if ($action === 'print_all_and_process') {
+    // Aksi baru: Cetak semua resi 'belum_dicetak' DAN proses
     $filename = 'semua_resi_belum_dicetak_' . date('Ymd_His') . '.pdf';
-    $result = $conn->query("SELECT * FROM orders WHERE status = 'belum_dicetak' ORDER BY created_at ASC");
-    if ($result) {
-        while($order = $result->fetch_assoc()) {
-            $orders_to_print[] = $order;
-        }
-    }
-} 
-elseif (isset($_GET['order_id'])) {
-    $order_id = (int)$_GET['order_id'];
+    $sql_where = "WHERE status = 'belum_dicetak'";
+
+} elseif ($action === 'print_single_and_process' && $order_id > 0) {
+    // Aksi baru: Cetak satu resi 'belum_dicetak' DAN proses
     $filename = 'resi_' . $order_id . '.pdf';
-    $stmt = $conn->prepare("SELECT * FROM orders WHERE id = ?");
-    $stmt->bind_param("i", $order_id);
-    $stmt->execute();
-    $result = $stmt->get_result();
-    if ($result->num_rows > 0) {
-        $orders_to_print[] = $result->fetch_assoc();
-    }
-    $stmt->close();
+    $sql_where = "WHERE id = ? AND status = 'belum_dicetak'";
+    $sql_params[] = $order_id;
+    $sql_types = "i";
+
+} elseif ($order_id > 0) {
+    // Aksi lama: Cetak ulang (tanpa 'action'), misal dari status 'processed'
+    $filename = 'resi_' . $order_id . '.pdf';
+    $sql_where = "WHERE id = ?";
+    $sql_params[] = $order_id;
+    $sql_types = "i";
+
+} elseif ($status === 'belum_dicetak') {
+    // Aksi lama: Cetak semua dari link 'status=belum_dicetak' (tanpa 'action')
+    // Ini TIDAK akan mengupdate status, untuk backward compatibility
+    $filename = 'semua_resi_belum_dicetak_' . date('Ymd_His') . '.pdf';
+    $sql_where = "WHERE status = 'belum_dicetak'";
+
+} elseif ($status === 'processed') {
+    // PERUBAHAN: Aksi baru untuk cetak ulang semua 'processed' (TANPA update status)
+    $filename = 'semua_resi_diproses_' . date('Ymd_His') . '.pdf';
+    $sql_where = "WHERE status = 'processed'";
+    // Penting: 'action' TIDAK diset, jadi 'order_ids_to_update' akan kosong.
+
 } else {
     die('Parameter tidak valid.');
 }
 
+// 2. AMBIL DATA PESANAN UNTUK DICETAK
+$sql_fetch = "SELECT * FROM orders $sql_where ORDER BY created_at ASC";
+$stmt_fetch = $conn->prepare($sql_fetch);
+if (!empty($sql_params)) {
+    $stmt_fetch->bind_param($sql_types, ...$sql_params);
+}
+$stmt_fetch->execute();
+$result_fetch = $stmt_fetch->get_result();
+
+if ($result_fetch->num_rows > 0) {
+    while ($order = $result_fetch->fetch_assoc()) {
+        $orders_to_print[] = $order;
+        // Kumpulkan ID untuk di-update HANYA JIKA 'action' SPESIFIK dipanggil
+        if ($action === 'print_all_and_process' || $action === 'print_single_and_process') {
+            $order_ids_to_update[] = $order['id'];
+        }
+    }
+}
+$stmt_fetch->close();
+
+// 3. JALANKAN UPDATE STATUS JIKA DIPERLUKAN
+if (!empty($order_ids_to_update)) {
+    $conn->begin_transaction();
+    try {
+        $placeholders = implode(',', array_fill(0, count($order_ids_to_update), '?'));
+        $types_update = str_repeat('i', count($order_ids_to_update));
+        
+        $stmt_update = $conn->prepare("UPDATE orders SET status = 'processed' WHERE id IN ($placeholders)");
+        $stmt_update->bind_param($types_update, ...$order_ids_to_update);
+        $stmt_update->execute();
+        $stmt_update->close();
+        
+        $conn->commit();
+    } catch (Exception $e) {
+        $conn->rollback();
+        die("Gagal memperbarui status pesanan: " . $e->getMessage());
+    }
+}
+
+// --- AKHIR LOGIKA BARU ---
+
+
+// 4. LANJUTKAN KE GENERASI PDF (Logika Anda yang sudah ada)
 if (empty($orders_to_print)) {
-    set_flashdata('info', 'Tidak ada resi yang perlu dicetak.');
-    redirect('/admin/admin.php?page=pesanan');
+    $status_redirect = $status ?? $status_filter ?? 'semua';
+     if ($status === 'processed') {
+        set_flashdata('info', 'Tidak ada pesanan \'Diproses\' untuk dicetak.');
+        redirect('/admin/admin.php?page=pesanan&status=processed');
+    } else {
+        set_flashdata('info', 'Tidak ada resi yang perlu dicetak.');
+        redirect('/admin/admin.php?page=pesanan&status=belum_dicetak');
+    }
 }
 
 // --- PROSES PEMBUATAN KONTEN HTML ---
-$template_html = file_get_contents(__DIR__ . '/resi_template.html');
+// Asumsi Anda punya file resi_template.html di direktori yang sama
+$template_html_path = __DIR__ . '/resi_template.html';
+if (!file_exists($template_html_path)) {
+    die("Error: File template resi 'resi_template.html' tidak ditemukan.");
+}
+$template_html = file_get_contents($template_html_path);
 $all_receipts_html = '';
 
 foreach ($orders_to_print as $order) {
@@ -91,9 +167,11 @@ foreach ($orders_to_print as $order) {
         '{{PRODUK_ITEMS}}'     => $items_html,
     ];
     
-    // PERBAIKAN: Bungkus setiap resi dalam div dengan class .receipt-wrapper
+    // Bungkus setiap resi dalam div dengan class .receipt-wrapper
     $all_receipts_html .= '<div class="receipt-wrapper">' . str_replace(array_keys($placeholders), array_values($placeholders), $template_html) . '</div>';
 }
+
+$conn->close();
 
 // --- PROSES GENERATE PDF DENGAN DOMPDF ---
 $options = new Options();
@@ -103,7 +181,7 @@ $options->set('defaultFont', 'Helvetica');
 
 $dompdf = new Dompdf($options);
 
-// PERBAIKAN: Tambahkan style untuk .receipt-wrapper di dalam HTML yang akan di-render
+// Tambahkan style untuk .receipt-wrapper di dalam HTML yang akan di-render
 $final_html = '
 <style>
     /* Mengatur agar setiap wrapper resi selalu mulai di halaman baru */
@@ -119,12 +197,13 @@ $final_html = '
 $dompdf->loadHtml($final_html);
 
 // Set ukuran kertas: 4.72 x 7.35 inches (portrait)
+// (Ukuran ini dari file Anda)
 $width_in_points = 4.72 * 72;
 $height_in_points = 7.35 * 72;
 $custom_paper = array(0, 0, $width_in_points, $height_in_points);
 $dompdf->setPaper($custom_paper);
 
 $dompdf->render();
-$dompdf->stream($filename, ["Attachment" => false]);
+$dompdf->stream($filename, ["Attachment" => false]); // Tampilkan di browser
 
 ?>

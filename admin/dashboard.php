@@ -5,10 +5,14 @@ if (!defined('IS_ADMIN_PAGE')) die('Akses dilarang');
 
 // --- PENGAMBILAN DATA STATISTIK ---
 
+// --- PERUBAHAN: Tentukan status yang dihitung sebagai pendapatan ---
+$status_pendapatan_list = "('belum_dicetak', 'processed', 'shipped', 'completed')";
+
 // 1. Statistik Utama
 $total_pesanan = $conn->query("SELECT COUNT(id) as total FROM orders WHERE status != 'cancelled'")->fetch_assoc()['total'];
 $pesanan_baru = $conn->query("SELECT COUNT(id) as total FROM orders WHERE status = 'belum_dicetak' OR status = 'waiting_approval'")->fetch_assoc()['total'];
-$pendapatan_total = $conn->query("SELECT SUM(total) as total FROM orders WHERE status = 'completed'")->fetch_assoc()['total'];
+// PERUBAHAN: Query pendapatan total
+$pendapatan_total = $conn->query("SELECT SUM(total) as total FROM orders WHERE status IN $status_pendapatan_list")->fetch_assoc()['total'];
 $total_user = $conn->query("SELECT COUNT(id) as total FROM users WHERE role = 'user'")->fetch_assoc()['total'];
 
 // 2. Rekap Harian (Hari Ini)
@@ -16,7 +20,8 @@ $today = date('Y-m-d');
 $rekap_harian = $conn->query("
     SELECT 
         COUNT(id) as total_orders, 
-        SUM(CASE WHEN status = 'completed' THEN total ELSE 0 END) as total_sales
+        -- PERUBAHAN: SUM CASE
+        SUM(CASE WHEN status IN $status_pendapatan_list THEN total ELSE 0 END) as total_sales
     FROM orders 
     WHERE DATE(created_at) = '$today' AND status != 'cancelled'
 ")->fetch_assoc();
@@ -26,7 +31,8 @@ $this_month = date('Y-m');
 $rekap_bulanan = $conn->query("
     SELECT 
         COUNT(id) as total_orders, 
-        SUM(CASE WHEN status = 'completed' THEN total ELSE 0 END) as total_sales
+        -- PERUBAHAN: SUM CASE
+        SUM(CASE WHEN status IN $status_pendapatan_list THEN total ELSE 0 END) as total_sales
     FROM orders 
     WHERE DATE_FORMAT(created_at, '%Y-%m') = '$this_month' AND status != 'cancelled'
 ")->fetch_assoc();
@@ -40,7 +46,8 @@ for ($i = 6; $i >= 0; $i--) {
     $query = $conn->query("
         SELECT SUM(total) as daily_sales 
         FROM orders 
-        WHERE DATE(created_at) = '$date' AND status = 'completed'
+        -- PERUBAHAN: Query chart
+        WHERE DATE(created_at) = '$date' AND status IN $status_pendapatan_list
     ");
     $result = $query->fetch_assoc();
     $chart_data[] = (float)($result['daily_sales'] ?? 0);
@@ -144,7 +151,7 @@ if ($result_latest) {
                                 <p class="font-semibold text-gray-800"><?= htmlspecialchars($order['user_name']) ?></p>
                                 <p class="text-sm text-gray-500"><?= htmlspecialchars($order['order_number']) ?></p>
                             </div>
-                            <div class="text-right">
+                            <div classs="text-right">
                                 <p class="font-semibold text-indigo-600"><?= format_rupiah($order['total']) ?></p>
                                 <span class="text-xs font-medium px-2 py-0.5 rounded-full 
                                     <?= strpos($order['status'], 'completed') !== false ? 'bg-green-100 text-green-800' : (strpos($order['status'], 'cancelled') !== false ? 'bg-red-100 text-red-800' : 'bg-yellow-100 text-yellow-800') ?>">

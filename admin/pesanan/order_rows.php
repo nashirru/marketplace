@@ -1,87 +1,85 @@
 <?php
 // File: admin/pesanan/order_rows.php
-// Bagian ini hanya berisi loop untuk menampilkan baris-baris tabel pesanan.
-// Tujuannya agar bisa dipanggil ulang oleh live_search.php
+// File ini HANYA berisi loop <tr> untuk AJAX
+// Layout ini harus SAMA PERSIS dengan <tbody> di pesanan.php
 ?>
 
-<?php if(!empty($orders)): ?>
-    <?php foreach($orders as $order): ?>
-        <tr>
-            <?php if (!empty($bulk_action_options)): ?>
-            <td class="px-4 py-4">
-                <input type="checkbox" name="order_ids[]" value="<?= $order['id'] ?>" class="order-checkbox h-4 w-4 text-indigo-600 border-gray-300 rounded focus:ring-indigo-500">
-            </td>
-            <?php endif; ?>
-            <td class="px-4 py-4 whitespace-nowrap text-sm">
-                <a href="<?= BASE_URL ?>/checkout/invoice.php?hash=<?= $order['order_hash'] ?>" target="_blank" class="font-medium text-indigo-600 hover:text-indigo-800">
-                   <i class="fas fa-receipt mr-1"></i> <?= htmlspecialchars($order['order_number']) ?>
-                </a>
-            </td>
-            <td class="px-4 py-4 whitespace-nowrap text-sm text-gray-500"><?= htmlspecialchars($order['user_name']) ?></td>
-            <td class="px-4 py-4 whitespace-nowrap text-sm text-gray-500"><?= htmlspecialchars($order['phone_number']) ?></td>
-            <td class="px-4 py-4 whitespace-nowrap text-sm text-gray-500"><?= format_rupiah($order['total']) ?></td>
-            <td class="px-4 py-4 whitespace-nowrap text-sm text-center">
-                <?php if (!empty($order['payment_proof'])): ?>
-                    <a href="<?= BASE_URL ?>/assets/images/proof/<?= $order['payment_proof'] ?>" target="_blank" class="text-indigo-600 hover:underline">
-                        <i class="fas fa-eye"></i> Lihat
-                    </a>
-                <?php else: ?>
-                    <span class="text-gray-400">-</span>
-                <?php endif; ?>
-            </td>
-            <td class="px-4 py-4 whitespace-nowrap text-sm text-center">
-                <span class="px-2 inline-flex text-xs leading-5 font-semibold rounded-full <?= get_admin_status_class($order['status']) ?>">
-                    <?= htmlspecialchars($status_map[$order['status']]) ?>
-                </span>
-            </td>
-            <td class="px-4 py-4 whitespace-nowrap text-sm">
-                <div class="flex items-center space-x-3">
-                    
-                    <?php if ($order['status'] == 'waiting_approval'): ?>
-                        <form action="<?= BASE_URL ?>/admin/admin.php" method="POST" onsubmit="return confirm('Anda yakin ingin MENYETUJUI pesanan ini?');">
-                            <input type="hidden" name="order_id" value="<?= $order['id'] ?>">
-                            <input type="hidden" name="action" value="approve">
-                            <input type="hidden" name="current_status" value="<?= htmlspecialchars($status_filter) ?>">
-                            <button type="submit" name="verify_order" class="text-green-500 hover:text-green-700 transition" title="Setujui Pesanan"><i class="fas fa-check-circle fa-lg"></i></button>
-                        </form>
-                        <form action="<?= BASE_URL ?>/admin/admin.php" method="POST" onsubmit="return confirm('Anda yakin ingin MENOLAK pesanan ini?');">
-                            <input type="hidden" name="order_id" value="<?= $order['id'] ?>">
-                            <input type="hidden" name="action" value="reject">
-                            <input type="hidden" name="current_status" value="<?= htmlspecialchars($status_filter) ?>">
-                            <button type="submit" name="verify_order" class="text-red-500 hover:text-red-700 transition" title="Tolak Pesanan"><i class="fas fa-times-circle fa-lg"></i></button>
-                        </form>
-
-                    <?php elseif ($order['status'] == 'belum_dicetak'): ?>
-                        <a href="<?= BASE_URL ?>/admin/pesanan/cetak_resi.php?order_id=<?= $order['id'] ?>" target="_blank" class="text-cyan-500 hover:text-cyan-700 transition" title="Cetak Resi"><i class="fas fa-print fa-lg"></i></a>
-                        <form action="<?= BASE_URL ?>/admin/admin.php" method="POST">
-                            <input type="hidden" name="order_id" value="<?= $order['id'] ?>">
-                            <input type="hidden" name="current_status" value="<?= htmlspecialchars($status_filter) ?>">
-                            <button type="submit" name="update_status_simple" value="processed" class="text-indigo-500 hover:text-indigo-700 transition" title="Proses Pesanan"><i class="fas fa-box-open fa-lg"></i></button>
-                        </form>
-
-                    <?php elseif ($order['status'] == 'processed'): ?>
-                        <form action="<?= BASE_URL ?>/admin/admin.php" method="POST">
-                            <input type="hidden" name="order_id" value="<?= $order['id'] ?>">
-                            <input type="hidden" name="current_status" value="<?= htmlspecialchars($status_filter) ?>">
-                            <button type="submit" name="update_status_simple" value="shipped" class="text-blue-500 hover:text-blue-700 transition" title="Kirim Pesanan"><i class="fas fa-shipping-fast fa-lg"></i></button>
-                        </form>
-
-                    <?php elseif ($order['status'] == 'shipped'): ?>
-                        <form action="<?= BASE_URL ?>/admin/admin.php" method="POST">
-                            <input type="hidden" name="order_id" value="<?= $order['id'] ?>">
-                            <input type="hidden" name="current_status" value="<?= htmlspecialchars($status_filter) ?>">
-                            <button type="submit" name="update_status_simple" value="completed" class="text-green-500 hover:text-green-700 transition" title="Selesaikan Pesanan"><i class="fas fa-user-check fa-lg"></i></button>
-                        </form>
-
-                    <?php else: ?>
-                        <span class="text-gray-400 text-xs italic">Tidak ada aksi</span>
-                    <?php endif; ?>
-                </div>
-            </td>
-        </tr>
-    <?php endforeach; ?>
-<?php else: ?>
+<?php if (!empty($orders)): foreach ($orders as $order): ?>
     <tr>
-        <td colspan="<?= !empty($bulk_action_options) ? '8' : '7' ?>" class="text-center py-8 text-gray-500">Tidak ada pesanan yang ditemukan.</td>
+        <?php if ($bulk_action_options): ?>
+        <td class="px-4 py-4"><input type="checkbox" name="selected_orders[]" value="<?= $order['id'] ?>" class="order-checkbox"></td>
+        <?php endif; ?>
+        <td class="px-6 py-4"><div class="font-bold text-indigo-600"><?= htmlspecialchars($order['order_number']) ?></div><div class="text-xs text-gray-500"><?= date('d M Y, H:i', strtotime($order['created_at'])) ?></div></td>
+        <td class="px-6 py-4"><div class="text-sm"><?= htmlspecialchars($order['user_name']) ?></div><div class="text-xs text-gray-500"><?= htmlspecialchars($order['phone_number']) ?></div></td>
+        <td class="px-6 py-4 font-medium"><?= format_rupiah($order['total']) ?></td>
+        <td class="px-6 py-4 text-center"><span class="px-2 inline-flex text-xs leading-5 font-semibold rounded-full <?= get_status_class($order['status']) ?>"><?= $status_map[$order['status']] ?></span></td>
+        
+        <!-- Kolom Aksi 1 (Detail/Cetak) -->
+        <td class="px-6 py-4 text-center align-top">
+            <div class="flex items-center justify-center gap-2">
+                <!-- Tombol detail SEKARANG punya class btn-toggle-detail -->
+                <button type="button" data-order-id="<?= $order['id'] ?>" title="Lihat Detail" class="btn-toggle-detail text-gray-500 hover:text-indigo-600"><i class="fas fa-eye"></i></button>
+                
+                <?php if($order['status'] == 'belum_dicetak'): ?>
+                    <a href="<?= BASE_URL ?>/admin/pesanan/cetak_resi.php?action=print_single_and_process&order_id=<?= $order['id'] ?>" 
+                       target="_blank" title="Cetak Resi & Proses" 
+                       onclick="return confirm('Anda yakin ingin mencetak resi ini?\nStatus pesanan akan diubah menjadi \'Diproses\'.');"
+                       class="text-gray-500 hover:text-black"><i class="fas fa-print"></i></a>
+                <?php elseif($order['status'] == 'processed'): ?>
+                    <a href="<?= BASE_URL ?>/admin/pesanan/cetak_resi.php?order_id=<?= $order['id'] ?>" target="_blank" title="Cetak Ulang Resi" class="text-gray-500 hover:text-black"><i class="fas fa-print"></i></a>
+                <?php endif; ?>
+            </div>
+        </td>
+
+        <!-- Kolom Aksi 2 (Update Status) -->
+        <td class="px-6 py-4 text-center align-top">
+            <div class="flex items-center justify-center gap-2"> 
+                <?php switch($order['status']): 
+                    case 'waiting_approval': ?>
+                        <button type="button" data-order-id="<?= $order['id'] ?>" data-action="approve_payment" data-action-name="Setujui" title="Setujui" class="btn-update-status text-green-500 hover:text-green-700"><i class="fas fa-check-circle"></i></button>
+                        <button type="button" data-order-id="<?= $order['id'] ?>" data-action="reject_payment" data-action-name="Tolak" title="Tolak" class="btn-update-status text-red-500 hover:text-red-700"><i class="fas fa-times-circle"></i></button>
+                    <?php break; case 'belum_dicetak': ?>
+                        <button type="button" data-order-id="<?= $order['id'] ?>" data-action="process_order" data-action-name="Proses" title="Proses Pesanan" class="btn-update-status text-cyan-500 hover:text-cyan-700"><i class="fas fa-box"></i></button>
+                    <?php break; case 'processed': ?>
+                        <button type="button" data-order-id="<?= $order['id'] ?>" data-action="ship_order" data-action-name="Kirim" title="Kirim Pesanan" class="btn-update-status text-blue-500 hover:text-blue-700"><i class="fas fa-truck"></i></button>
+                    <?php break; case 'shipped': ?>
+                        <button type="button" data-order-id="<?= $order['id'] ?>" data-action="complete_order" data-action-name="Selesaikan" title="Selesaikan Pesanan" class="btn-update-status text-purple-500 hover:text-purple-700"><i class="fas fa-check-double"></i></button>
+                    <?php break; 
+                    default: ?>
+                        <span class="text-gray-400 text-xs">-</span>
+                <?php endswitch; ?>
+            </div>
+        </td>
     </tr>
+    <!-- Baris Detail (tetap dikontrol oleh JS di pesanan.php) -->
+    <tr id="details-<?= $order['id'] ?>" class="hidden bg-gray-50">
+        <td colspan="<?= $bulk_action_options ? 7 : 6 ?>" class="p-4">
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                    <h4 class="font-semibold text-xs mb-2 text-gray-600">ITEM PESANAN:</h4>
+                    <div class="space-y-2">
+                        <?php if (!empty($order['items'])): foreach($order['items'] as $item): ?>
+                            <div class="flex items-center text-xs text-gray-700">
+                                <img src="<?= BASE_URL ?>/assets/images/produk/<?= htmlspecialchars($item['product_image']) ?>" class="w-8 h-8 rounded object-cover mr-3 border">
+                                <span class="flex-grow"><?= htmlspecialchars($item['product_name']) ?></span>
+                                <span class="font-medium">x <?= $item['quantity'] ?></span>
+                            </div>
+                        <?php endforeach; else: ?>
+                            <p class="text-xs text-gray-500">Tidak ada item</p>
+                        <?php endif; ?>
+                    </div>
+                </div>
+                <?php if(!empty($order['payment_proof'])): ?>
+                <div>
+                    <h4 class="font-semibold text-xs mb-2 text-gray-600">BUKTI PEMBAYARAN:</h4>
+                    <a href="<?= BASE_URL ?>/assets/images/proof/<?= $order['payment_proof'] ?>" target="_blank">
+                        <img src="<?= BASE_URL ?>/assets/images/proof/<?= $order['payment_proof'] ?>" class="h-24 rounded border cursor-pointer">
+                    </a>
+                </div>
+                <?php endif; ?>
+            </div>
+        </td>
+    </tr>
+<?php endforeach; else: ?>
+    <tr><td colspan="<?= $bulk_action_options ? 7 : 6 ?>" class="text-center py-10 text-gray-500">Tidak ada pesanan ditemukan.</td></tr>
 <?php endif; ?>

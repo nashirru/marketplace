@@ -63,8 +63,11 @@ function update_or_insert_setting($conn, $key, $value) {
     return $result; 
 }
 
-// --- LOGIKA AKSI PESANAN TERPUSAT ---
+// --- LOGIKA AKSI PESANAN TERPUSAT (AJAX-AWARE) ---
 if (isset($_POST['action']) && in_array($_POST['action'], ['approve_payment', 'reject_payment', 'process_order', 'ship_order', 'complete_order'])) {
+    
+    // PERBAIKAN: Cek jika ini request AJAX
+    $is_ajax = isset($_POST['is_ajax']) && $_POST['is_ajax'] == '1';
     
     $action = $_POST['action'];
     $redirect_url = '/admin/admin.php?' . ($_POST['active_query_string'] ?? 'page=pesanan');
@@ -77,7 +80,13 @@ if (isset($_POST['action']) && in_array($_POST['action'], ['approve_payment', 'r
     }
 
     if (empty($order_ids)) {
-        set_flashdata('error', 'Tidak ada pesanan yang dipilih.');
+        $message = 'Tidak ada pesanan yang dipilih.';
+        if ($is_ajax) {
+            header('Content-Type: application/json');
+            echo json_encode(['success' => false, 'message' => $message]);
+            exit;
+        }
+        set_flashdata('error', $message);
         redirect($redirect_url);
     }
 
@@ -109,7 +118,13 @@ if (isset($_POST['action']) && in_array($_POST['action'], ['approve_payment', 'r
             $success_message = 'Pesanan berhasil diselesaikan.';
             break;
         default:
-            set_flashdata('error', 'Aksi tidak dikenal.');
+            $message = 'Aksi tidak dikenal.';
+            if ($is_ajax) {
+                header('Content-Type: application/json');
+                echo json_encode(['success' => false, 'message' => $message]);
+                exit;
+            }
+            set_flashdata('error', $message);
             redirect($redirect_url);
     }
     
@@ -138,6 +153,7 @@ if (isset($_POST['action']) && in_array($_POST['action'], ['approve_payment', 'r
         if ($stmt->execute()) {
             $count = $stmt->affected_rows;
             foreach($order_ids as $order_id) {
+                // Ambil user_id dan order_number untuk notifikasi
                 $result = $conn->query("SELECT user_id, order_number FROM orders WHERE id = $order_id");
                 $order = $result->fetch_assoc();
                 if ($order) {
@@ -146,15 +162,40 @@ if (isset($_POST['action']) && in_array($_POST['action'], ['approve_payment', 'r
                 }
             }
             $conn->commit();
-            set_flashdata('success', ($count > 1 ? "$count pesanan " : "Pesanan ") . $success_message);
+            $message = ($count > 1 ? "$count pesanan " : "Pesanan ") . $success_message;
+            if ($is_ajax) {
+                header('Content-Type: application/json');
+                echo json_encode(['success' => true, 'message' => $message]);
+                exit;
+            }
+            set_flashdata('success', $message);
         } else {
             $conn->rollback();
-            set_flashdata('error', $error_message . ' Error DB: ' . $conn->error);
+            $message = $error_message . ' Error DB: ' . $conn->error;
+            if ($is_ajax) {
+                header('Content-Type: application/json');
+                echo json_encode(['success' => false, 'message' => $message]);
+                exit;
+            }
+            set_flashdata('error', $message);
         }
         $stmt->close();
     } catch (Exception $e) {
         $conn->rollback();
-        set_flashdata('error', $error_message . ' Error: ' . $e->getMessage());
+        $message = $error_message . ' Error: ' . $e->getMessage();
+        if ($is_ajax) {
+            header('Content-Type: application/json');
+            echo json_encode(['success' => false, 'message' => $message]);
+            exit;
+        }
+        set_flashdata('error', $message);
+    }
+
+    if ($is_ajax) {
+        // Fallback for any unhandled exit
+        header('Content-Type: application/json');
+        echo json_encode(['success' => false, 'message' => 'Terjadi kesalahan tidak terduga.']);
+        exit;
     }
     redirect($redirect_url);
 }
@@ -429,16 +470,29 @@ $is_settings_submenu = in_array($page_name, ['pengaturan_toko', 'pengaturan_user
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
     <style>
         body { font-family: 'Inter', sans-serif; background-color: #f4f7f9; }
-        .sidebar { min-width: 250px; }
+        /* Style untuk sidebar di desktop, di mobile akan di-override Tailwind */
+        .sidebar { min-width: 250px; } 
         .submenu-active > div { max-height: 500px; opacity: 1; transition: all 0.3s ease-in-out; }
         .submenu-inactive > div { max-height: 0; opacity: 0; overflow: hidden; transition: all 0.3s ease-in-out; }
     </style>
 </head>
-<body>
-    <div class="flex h-screen bg-gray-100">
+<body class="bg-gray-100">
+    
+    <div class="relative min-h-screen md:flex">
         
+        <!-- Tombol Toggle Mobile -->
+        <div class="fixed top-0 left-0 z-20 p-4 md:hidden">
+            <button id="sidebar-toggle" class="p-2 bg-gray-800 text-white rounded-md shadow-lg">
+                <i id="sidebar-open-icon" class="fas fa-bars"></i>
+                <i id="sidebar-close-icon" class="fas fa-times hidden"></i>
+            </button>
+        </div>
+
         <!-- Sidebar -->
-        <aside class="sidebar bg-gray-800 text-white flex flex-col">
+        <aside id="admin-sidebar" class="sidebar bg-gray-800 text-white flex flex-col w-64 min-h-screen
+                                        fixed inset-y-0 left-0 z-10
+                                        transform -translate-x-full md:translate-x-0 md:relative
+                                        transition-transform duration-300 ease-in-out">
             <div class="p-6 text-xl font-semibold border-b border-gray-700">Admin Warok Kite</div>
             <nav class="flex-grow p-4 space-y-2">
                 <a href="?page=dashboard" class="flex items-center p-3 rounded-lg <?= $page_name == 'dashboard' ? 'bg-indigo-600 font-bold' : 'hover:bg-gray-700' ?>">Dashboard</a>
@@ -466,7 +520,7 @@ $is_settings_submenu = in_array($page_name, ['pengaturan_toko', 'pengaturan_user
         </aside>
 
         <!-- Main Content -->
-        <main class="flex-1 p-6 overflow-y-auto">
+        <main id="main-content" class="flex-1 p-6 overflow-y-auto pt-20 md:pt-6">
             <?php flash_message(); ?>
             <h1 class="text-3xl font-bold mb-6 text-gray-800">
                 <?php
@@ -499,7 +553,9 @@ $is_settings_submenu = in_array($page_name, ['pengaturan_toko', 'pengaturan_user
             ?>
         </main>
     </div>
+
     <script>
+        // Script untuk Submenu Settings (Sudah ada)
         function toggleSettingsMenu() {
             const menu = document.getElementById('settings-menu');
             const arrow = document.getElementById('settings-arrow');
@@ -515,6 +571,32 @@ $is_settings_submenu = in_array($page_name, ['pengaturan_toko', 'pengaturan_user
                 menu.classList.remove('submenu-inactive');
                 menu.classList.add('submenu-active');
                 document.getElementById('settings-arrow').classList.add('rotate-90');
+            }
+        });
+
+        // --- SCRIPT BARU UNTUK SIDEBAR MOBILE ---
+        const sidebar = document.getElementById('admin-sidebar');
+        const toggleBtn = document.getElementById('sidebar-toggle');
+        const openIcon = document.getElementById('sidebar-open-icon');
+        const closeIcon = document.getElementById('sidebar-close-icon');
+        const mainContent = document.getElementById('main-content');
+
+        function toggleSidebar() {
+            sidebar.classList.toggle('-translate-x-full');
+            openIcon.classList.toggle('hidden');
+            closeIcon.classList.toggle('hidden');
+        }
+
+        // Buka/tutup sidebar saat tombol hamburger diklik
+        toggleBtn.addEventListener('click', (e) => {
+            e.stopPropagation(); // Mencegah event klik sampai ke mainContent
+            toggleSidebar();
+        });
+
+        // Tutup sidebar saat area konten utama diklik (hanya di mobile)
+        mainContent.addEventListener('click', () => {
+            if (!sidebar.classList.contains('-translate-x-full') && window.innerWidth < 768) {
+                toggleSidebar();
             }
         });
     </script>
