@@ -1,6 +1,6 @@
 <?php
 // File: sistem/sistem.php
-// FILE INI TIDAK DIUBAH SESUAI PERMINTAAN ANDA
+// PERBAIKAN: Menambahkan 1 fungsi baru: get_order_number_by_id()
 
 if (session_status() == PHP_SESSION_NONE) {
     session_start();
@@ -238,9 +238,6 @@ function get_cart_items_for_display($conn, $user_id) {
 function get_cart_items_for_calculation($conn, $user_id) {
     $cart_data = [];
     if ($user_id > 0) {
-        // ============================================================
-        // KUNCI PERBAIKAN: Menambahkan p.id as product_id
-        // ============================================================
         $stmt = $conn->prepare("SELECT c.quantity, p.price, p.id as product_id, p.name FROM cart c JOIN products p ON c.product_id = p.id WHERE c.user_id = ?");
         $stmt->bind_param("i", $user_id);
         $stmt->execute();
@@ -252,7 +249,6 @@ function get_cart_items_for_calculation($conn, $user_id) {
             $pids = array_keys($_SESSION['cart']);
             if (!empty($pids)) {
                 $placeholders = implode(',', array_fill(0, count($pids), '?'));
-                // Ambil juga id dan name
                 $stmt = $conn->prepare("SELECT id, price, name FROM products WHERE id IN ($placeholders)");
                 $stmt->bind_param(str_repeat('i', count($pids)), ...$pids);
                 $stmt->execute();
@@ -267,8 +263,8 @@ function get_cart_items_for_calculation($conn, $user_id) {
                         $cart_data[] = [
                             'quantity' => $item['quantity'], 
                             'price' => $prices[$pid],
-                            'product_id' => $pid, // tambahkan product_id
-                            'name' => $names[$pid] // tambahkan name
+                            'product_id' => $pid, 
+                            'name' => $names[$pid] 
                         ];
                     }
                 }
@@ -345,9 +341,6 @@ function get_user_addresses($conn, $user_id) {
     return $addresses;
 }
 
-// ============================================================
-// FUNGSI ALAMAT BARU (Perbaikan Logika)
-// ============================================================
 function get_user_address_by_id($conn, $address_id, $user_id) {
     $stmt = $conn->prepare("SELECT * FROM user_addresses WHERE id = ? AND user_id = ?");
     $stmt->bind_param("ii", $address_id, $user_id);
@@ -359,14 +352,13 @@ function get_user_address_by_id($conn, $address_id, $user_id) {
 }
 
 function save_user_address($conn, $user_id, $address_data) {
-    // Jika 'is_default' dicentang (1), nonaktifkan default lainnya dulu
     if (isset($address_data['is_default']) && $address_data['is_default'] == 1) {
         $stmt_reset = $conn->prepare("UPDATE user_addresses SET is_default = 0 WHERE user_id = ?");
         $stmt_reset->bind_param("i", $user_id);
         $stmt_reset->execute();
         $stmt_reset->close();
     } else {
-        $address_data['is_default'] = 0; // Pastikan 0 jika tidak dicentang
+        $address_data['is_default'] = 0; 
     }
 
     $stmt_insert = $conn->prepare("
@@ -391,9 +383,6 @@ function save_user_address($conn, $user_id, $address_data) {
         return false;
     }
 }
-// ============================================================
-// AKHIR FUNGSI ALAMAT BARU
-// ============================================================
 
 function set_default_address($conn, $user_id, $address_id) {
     $conn->query("UPDATE user_addresses SET is_default = 0 WHERE user_id = $user_id");
@@ -446,9 +435,6 @@ function get_user_purchase_count($conn, $user_id, $product_id, $stock_cycle_id) 
     return (int)($row['quantity_purchased'] ?? 0);
 }
 
-// ============================================================
-// KUNCI PERBAIKAN (BARU): Hitung kuota yang "dipesan" di order waiting_payment
-// ============================================================
 function get_user_pending_purchase_count($conn, $user_id, $product_id, $stock_cycle_id) {
     if (!$user_id || !$product_id) return 0;
 
@@ -643,7 +629,9 @@ function get_order_by_hash($conn, $hash) {
     return $order;
 }
 
-// [FUNGSI BARU] Ditambahkan untuk memperbaiki error fatal
+// ============================================================
+// [FUNGSI BARU] Ditambahkan untuk polling
+// ============================================================
 function get_order_number_by_id($conn, $order_id) {
     $stmt = $conn->prepare("SELECT order_number FROM orders WHERE id = ?");
     $stmt->bind_param("i", $order_id);
@@ -655,7 +643,7 @@ function get_order_number_by_id($conn, $order_id) {
 
 function get_order_items_with_details($conn, $order_id) {
     $items = [];
-    // [PERBAIKAN] Menambahkan p.id as product_id ke dalam SELECT
+    // [PERBAIKAN] Menambahkan p.id as product_id
     $stmt = $conn->prepare("
         SELECT oi.quantity, oi.price, p.name, p.image, p.id as product_id 
         FROM order_items oi 
@@ -732,3 +720,4 @@ function get_admin_status_class($status) {
     ];
     return $classes[$status] ?? 'bg-gray-100 text-gray-800';
 }
+?>

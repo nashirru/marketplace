@@ -77,7 +77,7 @@ try {
     $midtrans_items = [];
     foreach ($order_items as $item) {
         // ============================================================
-        // INI ADALAH PERBAIKANNYA
+        // INI ADALAH PERBAIKAN KRITIS UNTUK MIDTRANS
         // ============================================================
         $midtrans_items[] = [
             'id' => (string)$item['product_id'], // WAJIB (string)

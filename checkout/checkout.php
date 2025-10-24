@@ -1,6 +1,6 @@
 <?php
 // File: checkout/checkout.php
-// FILE LENGKAP DENGAN LOGIKA POLLING JS
+// PERBAIKAN: Mengarahkan onSuccess dan onPending ke halaman payment_status.php
 
 require_once '../config/config.php';
 require_once '../sistem/sistem.php';
@@ -34,7 +34,6 @@ $page_title = 'Checkout - ' . (get_setting($conn, 'store_name') ?? 'Warok Kite')
 <body class="bg-gray-100">
 
 <div id="loading-overlay" class="fixed top-0 left-0 w-full h-full bg-black bg-opacity-75 z-[9999] flex justify-center items-center text-white text-xl transition-opacity duration-300 opacity-0 pointer-events-none">
-    <!-- Konten di-set oleh JS -->
     <p><i class="fas fa-spinner fa-spin mr-3"></i>Mempersiapkan pembayaran...</p>
 </div>
 
@@ -44,6 +43,7 @@ $page_title = 'Checkout - ' . (get_setting($conn, 'store_name') ?? 'Warok Kite')
     <h1 class="text-3xl font-bold text-center mb-8">Checkout</h1>
     <?php flash_message(); ?>
 
+    <!-- Form action mengarah ke V2 untuk bypass cache -->
     <form action="<?= BASE_URL ?>/checkout/checkout_process.php" method="POST" id="checkout-form">
         <div class="grid grid-cols-1 lg:grid-cols-3 gap-8">
             <div class="lg:col-span-2 bg-white p-6 rounded-lg shadow-md">
@@ -55,7 +55,6 @@ $page_title = 'Checkout - ' . (get_setting($conn, 'store_name') ?? 'Warok Kite')
                         <option value="0">-- Isi Alamat Baru --</option>
                         <?php
                         
-                        // Cek dulu apakah ada alamat default di dalam array
                         $has_default = false;
                         foreach ($addresses as $addr) {
                             if ($addr['is_default']) {
@@ -69,10 +68,8 @@ $page_title = 'Checkout - ' . (get_setting($conn, 'store_name') ?? 'Warok Kite')
                             $selected = false;
                             
                             if ($addr['is_default']) {
-                                // 1. Jika ini adalah alamat default, pilih
                                 $selected = true;
                             } elseif (!$has_default && $is_first) {
-                                // 2. Jika TIDAK ADA alamat default, dan ini adalah item PERTAMA, pilih
                                 $selected = true;
                             }
                         ?>
@@ -80,7 +77,7 @@ $page_title = 'Checkout - ' . (get_setting($conn, 'store_name') ?? 'Warok Kite')
                             <?= htmlspecialchars($addr['full_name']) ?> - <?= htmlspecialchars($addr['address_line_1']) ?>, <?= htmlspecialchars($addr['city']) ?>
                         </option>
                         <?php 
-                            $is_first = false; // Set flag ke false setelah iterasi pertama
+                            $is_first = false;
                         endforeach; 
                         ?>
                     </select>
@@ -134,8 +131,10 @@ document.addEventListener('DOMContentLoaded', function() {
     const formFields = document.getElementById('address-form-fields');
     const defaultAddrData = <?= json_encode($default_address) ?>;
     
+    // ============================================================
+    // PERBAIKAN: Definisikan URL dasar ini di atas
+    // ============================================================
     const paymentStatusUrlBase = '<?= BASE_URL ?>/checkout/payment_status.php';
-    const profileUrl = '<?= BASE_URL ?>/profile/profile.php?tab=orders';
 
     function fillForm(data) {
         document.getElementById('full_name').value = data.full_name || '';
@@ -217,24 +216,26 @@ document.addEventListener('DOMContentLoaded', function() {
                 dbOrderId = result.db_order_id;
                 let paymentHandled = false;
 
-                // ============================================================
-                // UPDATE: Simpan order_id ke sessionStorage untuk polling
-                // ============================================================
-                sessionStorage.setItem('pending_order_id', dbOrderId);
-
                 window.snap.pay(result.snap_token, {
                     onSuccess: function(res){
                         paymentHandled = true;
-                        // Redirect ke profile dengan flag untuk polling
-                        window.location.href = `${profileUrl}&payment_pending=${dbOrderId}`;
+                        // ============================================================
+                        // PERBAIKAN: Arahkan ke poller, bukan profil
+                        // ============================================================
+                        window.location.href = `${paymentStatusUrlBase}?status=success&order_id=${dbOrderId}&message=${encodeURIComponent('Pembayaran berhasil! Memverifikasi...')}`;
                     },
                     onPending: function(res){
                         paymentHandled = true;
-                        window.location.href = `${profileUrl}&payment_pending=${dbOrderId}`;
+                        // ============================================================
+                        // PERBAIKAN: Arahkan ke poller, bukan profil
+                        // ============================================================
+                        window.location.href = `${paymentStatusUrlBase}?status=pending&order_id=${dbOrderId}&message=${encodeURIComponent('Pembayaran Anda tertunda. Memverifikasi...')}`;
                     },
                     onError: function(res){
                         paymentHandled = true;
-                        sessionStorage.removeItem('pending_order_id');
+                        // ============================================================
+                        // PERBAIKAN: Arahkan ke poller, bukan profil
+                        // ============================================================
                         window.location.href = `${paymentStatusUrlBase}?status=error&order_id=${dbOrderId}&message=${encodeURIComponent('Pembayaran gagal, silakan coba lagi.')}`;
                     },
                     onClose: function(){
@@ -242,7 +243,6 @@ document.addEventListener('DOMContentLoaded', function() {
                             loadingOverlay.classList.add('opacity-0', 'pointer-events-none');
                             submitButton.disabled = false;
                             submitButton.innerHTML = 'Lanjutkan ke Pembayaran';
-                            sessionStorage.removeItem('pending_order_id');
                         }
                     }
                 });

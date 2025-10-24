@@ -1,6 +1,7 @@
 <?php
 // File: checkout/payment_status.php
-// INI ADALAH FILE BARU YANG MENJADI SOLUSI
+// PERBAIKAN: Memperbaiki logika JavaScript agar polling berjalan
+// baik untuk status 'success' maupun 'pending'.
 
 // 1. Mulai sesi dan muat file yang diperlukan
 require_once '../config/config.php';
@@ -16,9 +17,6 @@ $status = sanitize_input($_GET['status'] ?? 'pending');
 $message = sanitize_input($_GET['message'] ?? 'Memproses pesanan Anda.');
 $order_id_encoded = sanitize_input($_GET['order_id'] ?? '');
 
-// Decode ID order (jika Anda mengenkripsinya. Jika tidak, cast ke int)
-// Berdasarkan file Anda (profile.php), Anda TIDAK mengenkripsi order_id saat me-redirect,
-// jadi kita akan meng-cast ke integer.
 $order_id = (int)$order_id_encoded;
 if ($order_id === 0) {
     // Jika tidak ada order_id, langsung arahkan ke profil
@@ -27,7 +25,6 @@ if ($order_id === 0) {
 }
 
 // 3. Atur notifikasi (flashdata) yang akan muncul di halaman profil
-// Ini akan menampilkan notifikasi "Pembayaran Berhasil"
 if ($status === 'success') {
     set_flashdata('success', $message);
 } elseif ($status === 'pending') {
@@ -43,7 +40,7 @@ $page_title = "Status Pembayaran";
 
 <!DOCTYPE html>
 <html lang="id">
-<?php page_head($page_title . ' - ' . get_setting($conn, 'store_name'), $conn); ?>
+<?php page_head($page_title . ' - ' . (get_setting($conn, 'store_name') ?? 'Warok Kite'), $conn); ?>
 <body class="bg-gray-100 flex items-center justify-center min-h-screen">
 
     <div class="bg-white p-8 rounded-lg shadow-xl text-center max-w-md w-full">
@@ -67,14 +64,14 @@ $page_title = "Status Pembayaran";
              <i class="fas fa-times-circle text-red-500 text-6xl mb-6"></i>
              <h1 class="text-2xl font-bold text-gray-800 mb-2">Verifikasi Gagal</h1>
              <p class="text-gray-600">Status pesanan Anda belum berubah. Mengarahkan Anda ke halaman profil...</p>
-        </div>
+         </div>
     </div>
 
 <script>
 document.addEventListener('DOMContentLoaded', function() {
     const orderId = <?= $order_id ?>;
-    // Status yang kita harapkan dari Midtrans (cth: 'success' atau 'pending')
-    const expectedStatus = '<?= htmlspecialchars($status) ?>'; 
+    // Status awal dari Midtrans (success, pending, error)
+    const initialStatus = '<?= htmlspecialchars($status) ?>'; 
     const profileUrl = '<?= BASE_URL ?>/profile/profile.php?tab=orders';
     
     const loadingSpinner = document.getElementById('loading-spinner');
@@ -104,30 +101,33 @@ document.addEventListener('DOMContentLoaded', function() {
         .then(response => response.json())
         .then(data => {
             if (data.success) {
-                // order_status adalah status DARI DATABASE LOKAL ANDA
+                // dbStatus adalah status DARI DATABASE LOKAL ANDA
+                // (hasil dari check_payment_status.php)
                 const dbStatus = data.order_status;
 
                 // KASUS 1: Pembayaran SUKSES
-                if (expectedStatus === 'success') {
-                    // Cek apakah DB sudah terupdate ke 'belum_dicetak'
-                    if (dbStatus === 'belum_dicetak') {
-                        // BERHASIL! Tampilkan pesan sukses & redirect
-                        loadingSpinner.classList.add('hidden');
-                        successMessage.classList.remove('hidden');
-                        setTimeout(() => { window.location.href = profileUrl; }, 1500);
-                    } else {
-                        // Belum terupdate, polling lagi
-                        setTimeout(pollStatus, 2000); 
-                    }
+                // (Status di DB sudah 'belum_dicetak' ATAU 'processed' dll)
+                if (dbStatus !== 'waiting_payment' && dbStatus !== 'cancelled' && dbStatus !== 'error') {
+                    // BERHASIL! Tampilkan pesan sukses & redirect
+                    loadingSpinner.classList.add('hidden');
+                    successMessage.classList.remove('hidden');
+                    setTimeout(() => { window.location.href = profileUrl; }, 1500);
                 } 
-                // KASUS 2: Pembayaran PENDING atau ERROR
+                // KASUS 2: Pembayaran GAGAL
+                else if (dbStatus === 'cancelled' || dbStatus === 'error') {
+                    // GAGAL. Tampilkan pesan gagal & redirect
+                    loadingSpinner.classList.add('hidden');
+                    failMessage.classList.remove('hidden');
+                    setTimeout(() => { window.location.href = profileUrl; }, 2000);
+                }
+                // KASUS 3: Pembayaran MASIH PENDING
+                // (Status di DB masih 'waiting_payment')
                 else {
-                    // Tidak perlu menunggu, statusnya memang 'pending' atau 'error'
-                    // Langsung redirect
-                    window.location.href = profileUrl;
+                    // Belum terupdate, polling lagi
+                    setTimeout(pollStatus, 2000); 
                 }
             } else {
-                // Gagal fetch, coba lagi
+                // Gagal fetch (error 500 dll), coba lagi
                 setTimeout(pollStatus, 2000);
             }
         })
@@ -137,8 +137,16 @@ document.addEventListener('DOMContentLoaded', function() {
         });
     }
 
-    // Mulai polling
-    pollStatus();
+    // ============================================================
+    // PERBAIKAN LOGIKA:
+    // ============================================================
+    if (initialStatus === 'error') {
+        // Jika status awal sudah error, tidak perlu polling, langsung redirect
+        window.location.href = profileUrl;
+    } else {
+        // Jika status awal 'success' ATAU 'pending', MULAI POLLING
+        pollStatus();
+    }
 });
 </script>
 

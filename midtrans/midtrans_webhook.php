@@ -1,7 +1,7 @@
 <?php
 // File: midtrans/midtrans_webhook.php
-// FILE INI SUDAH BENAR (TIDAK DIUBAH)
-// Log 'ERROR: Order not found' Anda akan HILANG setelah perbaikan di get_snap_token.php
+// PERBAIKAN: Validasi manual untuk log error yang lebih jelas
+// jika Server Key salah.
 
 header('Content-Type: text/plain');
 error_reporting(E_ALL);
@@ -27,36 +27,60 @@ write_log("========================================");
 write_log("INFO: Webhook dipanggil pada " . date('Y-m-d H:i:s'));
 
 require_once __DIR__ . '/../config/config.php';
-require_once __DIR__ . '/../midtrans/config_midtrans.php';
+require_once __DIR__ . '/../midtrans/config_midtrans.php'; // WAJIB ADA SERVER KEY
 require_once __DIR__ . '/../sistem/sistem.php';
 
 try {
-    $notif = new \Midtrans\Notification();
+    $raw_body = @file_get_contents('php://input');
+    if (empty($raw_body)) {
+        http_response_code(200);
+        write_log("INFO: Menerima webhook kosong. Diabaikan.");
+        echo "OK (Empty)";
+        exit;
+    }
+
+    $notif = json_decode($raw_body, true);
     
-    $transaction_status = $notif->transaction_status;
-    $transaction_id = $notif->transaction_id;
-    $fraud_status = $notif->fraud_status ?? 'accept';
-    $attempt_order_number = $notif->order_id;
-    $status_code = $notif->status_code;
-    $gross_amount = $notif->gross_amount;
+    if (json_last_error() !== JSON_ERROR_NONE || empty($notif['order_id'])) {
+        http_response_code(400); 
+        write_log("ERROR: Webhook tidak valid, JSON parse gagal, atau tidak mengandung order_id. Body: " . $raw_body);
+        echo "Invalid notification.";
+        exit;
+    }
 
-    write_log("DATA: Attempt Order Number: $attempt_order_number");
-    write_log("DATA: Transaction Status: $transaction_status");
-    write_log("DATA: Transaction ID: $transaction_id");
-    write_log("DATA: Fraud Status: $fraud_status");
-    write_log("DATA: Status Code: $status_code");
-    write_log("DATA: Gross Amount: $gross_amount");
+    write_log("INFO: Menerima notifikasi untuk Order ID: " . $notif['order_id']);
 
-    // Validasi Signature Key
-    $local_signature = hash("sha512", $attempt_order_number . $status_code . $gross_amount . \Midtrans\Config::$serverKey);
-    if ($notif->signature_key !== $local_signature) {
+    // ============================================================
+    // [VALIDASI MANUAL] Ini akan membuktikan Server Key Anda salah
+    // ============================================================
+    if (empty(\Midtrans\Config::$serverKey)) {
+         write_log("CRITICAL: Server Key KOSONG di config_midtrans.php!");
+         http_response_code(500);
+         die("Server Key not configured.");
+    }
+    
+    $local_signature = hash("sha512", $notif['order_id'] . $notif['status_code'] . $notif['gross_amount'] . \Midtrans\Config::$serverKey);
+
+    if ($notif['signature_key'] !== $local_signature) {
         http_response_code(403);
-        write_log("CRITICAL: Invalid signature key!");
+        write_log("CRITICAL: INVALID SIGNATURE KEY! SERVER KEY ANDA 99% SALAH.");
+        write_log("CRITICAL: Pastikan Anda menggunakan Server Key SANDBOX, bukan Client Key.");
         write_log("CRITICAL: Expected: $local_signature");
-        write_log("CRITICAL: Got: " . $notif->signature_key);
+        write_log("CRITICAL: Got: " . $notif['signature_key']);
+        write_log("CRITICAL: Server Key (partial): " . substr(\Midtrans\Config::$serverKey, 0, 8) . "...");
         die("Forbidden: Invalid signature.");
     }
     write_log("SUCCESS: Signature key valid");
+    // ============================================================
+
+    $transaction_status = $notif['transaction_status'];
+    $transaction_id = $notif['transaction_id'];
+    $fraud_status = $notif['fraud_status'] ?? 'accept';
+    $attempt_order_number = $notif['order_id'];
+    
+    write_log("DATA: Attempt Order Number: $attempt_order_number");
+    write_log("DATA: Transaction Status: $transaction_status");
+    write_log("DATA: Transaction ID: $transaction_id");
 
     // Ambil order_id dari payment_attempts
     $stmt_get_order = $conn->prepare("SELECT order_id FROM payment_attempts WHERE attempt_order_number = ?");
@@ -79,7 +103,7 @@ try {
     write_log("INFO: Database transaction started");
 
     try {
-        // Lock row untuk mencegah race condition
+        // Lock row
         $current_status_res = $conn->query("SELECT status, user_id FROM orders WHERE id=$order_id FOR UPDATE");
         $current_order = $current_status_res->fetch_assoc();
         $current_status = $current_order['status'];
@@ -123,13 +147,10 @@ try {
             }
             $stmt->close();
 
-            // ============================================================
             // PENCATATAN RIWAYAT PEMBELIAN (JIKA BERHASIL)
-            // ============================================================
             if ($is_success) {
                 write_log("INFO: Processing purchase records...");
                 
-                // Ambil detail item pesanan dengan stock_cycle_id
                 $stmt_items = $conn->prepare("
                     SELECT oi.product_id, oi.quantity, p.stock_cycle_id, p.name as product_name
                     FROM order_items oi 
@@ -169,18 +190,13 @@ try {
                         }
                     }
                     $stmt_record->close();
-                } else {
-                    write_log("WARNING: No items found for order $order_id");
                 }
 
-                // Kirim notifikasi sukses
                 create_notification($conn, $user_id, "Pembayaran berhasil! Pesanan Anda sedang diproses.");
                 write_log("INFO: Success notification sent to user $user_id");
             }
             
-            // ============================================================
             // KEMBALIKAN STOK (JIKA DIBATALKAN)
-            // ============================================================
             if ($new_status === 'cancelled') {
                 write_log("INFO: Restocking cancelled order items...");
                 
@@ -201,7 +217,6 @@ try {
                 }
                 $stmt_restock->close();
 
-                // Kirim notifikasi pembatalan
                 create_notification($conn, $user_id, "Pembayaran dibatalkan atau kedaluwarsa. Stok telah dikembalikan.");
                 write_log("INFO: Cancellation notification sent to user $user_id");
             }
@@ -221,10 +236,11 @@ try {
     }
 
 } catch (Exception $e) {
-    write_log("FATAL: Midtrans Notification Error: " . $e->getMessage());
+    write_log("FATAL: Unhandled Error: " . $e->getMessage());
     write_log("FATAL: Stack trace: " . $e->getTraceAsString());
     http_response_code(500);
     echo "ERROR: " . $e->getMessage();
 }
 
 write_log("========================================\n");
+?>
