@@ -1,0 +1,127 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Template Resi Final Diperbaiki</title>
+    <style>
+        /* Mengatur margin halaman PDF jadi sangat tipis (5mm) */
+        @page {
+            margin: 5mm;
+        }
+        body {
+            font-family: helvetica, sans-serif;
+            font-size: 12pt; /* Ukuran font dasar (PENGIRIM/PENERIMA TETAP 12-14pt) */
+            margin: 0;
+            padding: 0;
+        }
+        /* Styling untuk semua font yang lebih besar */
+        .font-large {
+            font-size: 14pt; /* Ukuran font utama diperbesar */
+        }
+        .font-medium {
+            font-size: 12pt;
+        }
+        /* Ukuran font kecil untuk produk */
+        .font-small {
+            font-size: 9pt; /* Ukuran font produk */
+        }
+        
+        /* Header produk dikecilkan font & paddingnya */
+        .product-header th {
+            padding: 4px; /* Padding header tabel produk */
+            font-size: 10pt; /* Font header tabel produk */
+        }
+    </style>
+</head>
+<body>
+    <table border="0" cellpadding="5" cellspacing="0" style="width: 100%; border: 2px solid #000; page-break-inside: avoid;">
+        
+        <!-- ====================================================== -->
+        <!-- BAGIAN ATAS: Informasi Pengirim & Penerima (TETAP) -->
+        <!-- ====================================================== -->
+        <tr valign="top">
+            <td>
+                <!-- Tabel Info Pengirim -->
+                <table border="0" cellpadding="0" cellspacing="0" style="width: 100%; border-bottom: 2px solid #000;">
+                    <tr>
+                        <td style="padding-bottom: 10px;" class="font-large">
+                            <strong>Pengirim :</strong> {{NAMA_PENGIRIM}} ({{HP_PENGIRIM}})
+                        </td>
+                    </tr>
+                </table>
+                <!-- Tabel Info Penerima -->
+                <table border="0" cellpadding="0" cellspacing="0" style="width: 100%; border-bottom: 2px solid #000;">
+                     <tr>
+                        <td style="padding-top: 10px; padding-bottom: 10px;">
+                            <table border="0" cellpadding="1" cellspacing="0" style="width: 100%;">
+                                <tr>
+                                    <td style="width: 85px; vertical-align: top;" class="font-large"><strong>Penerima</strong></td>
+                                    <td style="width: 10px; vertical-align: top;" class="font-large">:</td>
+                                    <td style="font-weight: bold; vertical-align: top;" class="font-large">{{PENERIMA_NAMA}}</td>
+                                </tr>
+                                <tr>
+                                    <td style="vertical-align: top;" class="font-large"><strong>No. Hp</strong></td>
+                                    <td style="vertical-align: top;" class="font-large">:</td>
+                                    <td style="font-weight: bold; vertical-align: top;" class="font-large">{{PENERIMA_HP}}</td>
+                                </tr>
+                                <tr>
+                                    <td style="vertical-align: top;" class="font-large"><strong>Alamat</strong></td>
+                                    <td style="vertical-align: top;" class="font-large">:</td>
+                                    <td style="vertical-align: top;" class="font-large">{{PENERIMA_ALAMAT}}</td>
+                                </tr>
+                            </table>
+                        </td>
+                    </tr>
+                </table>
+            </td>
+        </tr>
+
+        <!-- ====================================================== -->
+        <!-- BAGIAN BAWAH: Informasi Produk & Footer -->
+        <!-- ====================================================== -->
+        <tr valign="top">
+             <!-- PERBAIKAN DI SINI: Padding atas dilonggarkan sedikit -->
+            <td style="padding-top: 20mm;"> <!-- Diubah dari 5mm ke 10mm -->
+                <table border="0" cellpadding="0" cellspacing="0" style="width: 100%;">
+                    <!-- Info Produk -->
+                    <tr>
+                        <td>
+                            <div style="text-align: right; padding-bottom: 5px;" class="font-medium">
+                                <strong>INV. NO. :</strong> #{{ORDER_NUMBER}}
+                            </div>
+                            <table style="width: 100%; border-collapse: collapse;">
+                                <thead>
+                                    <!-- Class .product-header akan menerapkan style CSS di atas -->
+                                    <tr class="product-header" style="border-top: 2px solid #000; border-bottom: 2px solid #000;">
+                                        <th style="width: 10%; text-align: left;">No.</th>
+                                        <th style="width: 70%; text-align: left;">Nama Product</th>
+                                        <th style="width: 20%; text-align: center;">Qty</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {{PRODUK_ITEMS}}
+                                </tbody>
+                            </table>
+                        </td>
+                    </tr>
+                     <!-- Footer -->
+                    <tr>
+                        <td style="padding-top: 20px;">
+                            <table border="0" cellpadding="0" cellspacing="0" style="width: 100%;">
+                                <tr>
+                                    <td style="width: 50%;" class="font-large">
+                                        [ ] DFOD &nbsp; [ ] TUNAI
+                                    </td>
+                                    <td style="width: 50%; text-align: left;" class="font-small">
+                                        KOMPLAIN KERUSAKAN ATAU KEHILANGAN BARANG WAJIB DISERTAKAN VIDEO UNBOXING
+                                    </td>
+                                </tr>
+                            </table>
+                        </td>
+                    </tr>
+                </table>
+            </td>
+        </tr>
+    </table>
+</body>
+</html>
