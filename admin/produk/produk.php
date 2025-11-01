@@ -54,6 +54,7 @@ if ($action == 'add' || $action == 'edit') {
     // Ambil data produk
     $products = [];
     // Query tidak berubah, mengambil purchase_limit
+    // ✅ PERBAIKAN: Mengambil p.* (termasuk is_active)
     $sql = "SELECT p.*, c.name as category_name FROM products p JOIN categories c ON p.category_id = c.id" . $where_clause . " ORDER BY p.created_at DESC LIMIT ? OFFSET ?";
     $stmt_params = $params;
     $stmt_params[] = $limit;
@@ -104,6 +105,8 @@ if ($action == 'add' || $action == 'edit') {
                     <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Harga</th>
                     <th class="px-4 py-3 text-center text-xs font-medium text-gray-500 uppercase">Stok</th>
                     <th class="px-4 py-3 text-center text-xs font-medium text-gray-500 uppercase">Limit Beli</th>
+                    <!-- ✅ TOMBOL BARU DITAMBAHKAN DI SINI -->
+                    <th class="px-4 py-3 text-center text-xs font-medium text-gray-500 uppercase">Status</th>
                     <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Aksi</th>
                 </tr>
             </thead>
@@ -123,12 +126,34 @@ if ($action == 'add' || $action == 'edit') {
                             <td class="px-4 py-4 whitespace-nowrap text-sm text-center text-gray-500">
                                 <?= (isset($product['purchase_limit']) && $product['purchase_limit'] > 0) ? $product['purchase_limit'] : '<i class="fas fa-infinity text-gray-400"></i>' ?>
                             </td>
+                            <!-- ✅ TOMBOL BARU DITAMBAHKAN DI SINI -->
+                            <td class="px-4 py-4 whitespace-nowrap text-center">
+                                <form action="admin.php" method="POST" class="toggle-form">
+                                    <input type="hidden" name="page" value="produk">
+                                    <input type="hidden" name="action" value="toggle_product_status">
+                                    <input type="hidden" name="product_id" value="<?= $product['id'] ?>">
+                                    
+                                    <?php if ($product['is_active']): ?>
+                                        <input type="hidden" name="new_status" value="0">
+                                        <button type="submit" class="flex items-center justify-center gap-1.5 mx-auto text-green-600 hover:text-green-800" title="Klik untuk Nonaktifkan">
+                                            <i class="fas fa-toggle-on fa-lg"></i> <span class="text-xs font-medium">Aktif</span>
+                                        </button>
+                                    <?php else: ?>
+                                        <input type="hidden" name="new_status" value="1">
+                                        <button type="submit" class="flex items-center justify-center gap-1.5 mx-auto text-gray-400 hover:text-gray-600" title="Klik untuk Aktifkan">
+                                            <i class="fas fa-toggle-off fa-lg"></i> <span class="text-xs font-medium">Nonaktif</span>
+                                        </button>
+                                    <?php endif; ?>
+                                </form>
+                            </td>
                             <td class="px-4 py-4 whitespace-nowrap text-sm">
                                 <div class="flex items-center space-x-3">
                                     <a href="?page=produk&action=edit&id=<?= $product['id'] ?>" class="text-indigo-500 hover:text-indigo-700 transition" title="Edit Produk"><i class="fas fa-edit fa-lg"></i></a>
-                                    <form action="<?= BASE_URL ?>/admin/admin.php" method="POST" onsubmit="return confirm('Anda yakin ingin menghapus produk ini?');">
+                                    <!-- ✅ PERBAIKAN: Form Hapus (Soft Delete) -->
+                                    <form action="<?= BASE_URL ?>/admin/admin.php" method="POST" onsubmit="return confirm('Anda yakin ingin menonaktifkan produk ini? Produk tidak akan dihapus permanen.');">
                                         <input type="hidden" name="product_id" value="<?= $product['id'] ?>">
-                                        <button type="submit" name="delete_product" class="text-red-500 hover:text-red-700 transition" title="Hapus Produk"><i class="fas fa-trash-alt fa-lg"></i></button>
+                                        <!-- Nama 'delete_product' tetap, tapi logikanya di admin.php diubah -->
+                                        <button type="submit" name="delete_product" class="text-red-500 hover:text-red-700 transition" title="Hapus (Nonaktifkan)"><i class="fas fa-trash-alt fa-lg"></i></button>
                                     </form>
                                 </div>
                             </td>
@@ -136,7 +161,8 @@ if ($action == 'add' || $action == 'edit') {
                     <?php endforeach; ?>
                 <?php else: ?>
                     <tr>
-                        <td colspan="7" class="text-center py-8 text-gray-500">Tidak ada produk yang ditemukan.</td>
+                        <!-- ✅ Colspan disesuaikan menjadi 8 -->
+                        <td colspan="8" class="text-center py-8 text-gray-500">Tidak ada produk yang ditemukan.</td>
                     </tr>
                 <?php endif; ?>
             </tbody>

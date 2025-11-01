@@ -481,42 +481,77 @@ function get_product_limit($conn, $product_id) {
 }
 
 
-// --- FUNGSI UNTUK ADMIN ---
-
+// =================================================================
+// --- PERBAIKAN FUNGSI get_orders_with_items_by_status ---
+// Fungsi ini di-refactor untuk:
+// 1. Menerima filter $start_date dan $end_date dari $options.
+// 2. Menggunakan Prepared Statements untuk keamanan (mencegah SQL Injection).
+// =================================================================
 function get_orders_with_items_by_status($conn, $options) {
+    // Ambil semua opsi
     $status_filter = $options['status'] ?? 'semua';
     $search_query = $options['search'] ?? '';
     $limit = (int)($options['limit'] ?? 10);
     $current_page = max(1, (int)($options['p'] ?? 1));
     $offset = max(0, ($current_page - 1) * $limit);
     
+    // Ambil opsi tanggal BARU
+    $start_date = $options['start_date'] ?? '';
+    $end_date = $options['end_date'] ?? '';
+    
     if ($limit <= 0) $limit = 10;
 
+    // Persiapan untuk Prepared Statement
     $where_conditions = [];
-    $where_clause = "";
+    $params = [];
+    $types = "";
     
+    // 1. Filter Status
     if ($status_filter !== 'semua') {
-        $where_conditions[] = "o.status = '" . $conn->real_escape_string($status_filter) . "'";
+        $where_conditions[] = "o.status = ?";
+        $params[] = $status_filter;
+        $types .= "s";
     }
 
+    // 2. Filter Pencarian
     if (!empty($search_query)) {
-        $search_term = $conn->real_escape_string($search_query);
-        $where_conditions[] = "(o.order_number LIKE '%{$search_term}%' OR u.name LIKE '%{$search_term}%' OR o.phone_number LIKE '%{$search_term}%')";
+        $search_term = "%" . $search_query . "%";
+        $where_conditions[] = "(o.order_number LIKE ? OR u.name LIKE ? OR o.phone_number LIKE ?)";
+        // Tambahkan 3x karena ada 3 placeholder (?)
+        $params[] = $search_term;
+        $params[] = $search_term;
+        $params[] = $search_term;
+        $types .= "sss";
     }
 
+    // 3. Filter Tanggal (INI PERBAIKANNYA)
+    if (!empty($start_date) && !empty($end_date)) {
+        // Gunakan DATE() untuk membandingkan tanggalnya saja, mengabaikan jam
+        $where_conditions[] = "DATE(o.created_at) BETWEEN ? AND ?";
+        $params[] = $start_date;
+        $params[] = $end_date;
+        $types .= "ss";
+    }
+
+    // Gabungkan semua kondisi WHERE
+    $where_clause = "";
     if (!empty($where_conditions)) {
         $where_clause = " WHERE " . implode(" AND ", $where_conditions);
     }
     
+    // --- Query Total (Menggunakan Prepared Statement) ---
     $total_query = "SELECT COUNT(o.id) as total FROM orders o LEFT JOIN users u ON o.user_id = u.id" . $where_clause;
-    $result_total = $conn->query($total_query);
-    $total_records = 0;
     
-    if ($result_total) {
-        $row_total = $result_total->fetch_assoc();
-        $total_records = (int)$row_total['total'];
+    $stmt_total = $conn->prepare($total_query);
+    if (!empty($params)) {
+        $stmt_total->bind_param($types, ...$params);
     }
+    $stmt_total->execute();
+    $total_records = (int)$stmt_total->get_result()->fetch_assoc()['total'];
+    $stmt_total->close();
 
+
+    // --- Query Data Pesanan (Menggunakan Prepared Statement) ---
     $orders = [];
     $sql_orders = "
         SELECT o.*, u.name as user_name, u.email as user_email
@@ -524,10 +559,18 @@ function get_orders_with_items_by_status($conn, $options) {
         LEFT JOIN users u ON o.user_id = u.id
         {$where_clause}
         ORDER BY o.created_at DESC 
-        LIMIT {$limit} OFFSET {$offset}
+        LIMIT ? OFFSET ?
     ";
     
-    $result_orders = $conn->query($sql_orders);
+    // Tambahkan parameter LIMIT dan OFFSET ke $params dan $types
+    $params[] = $limit;
+    $params[] = $offset;
+    $types .= "ii";
+    
+    $stmt_orders = $conn->prepare($sql_orders);
+    $stmt_orders->bind_param($types, ...$params);
+    $stmt_orders->execute();
+    $result_orders = $stmt_orders->get_result();
     
     if ($result_orders) {
         $order_ids = [];
@@ -539,10 +582,12 @@ function get_orders_with_items_by_status($conn, $options) {
             $orders[$row['id']]['items'] = [];
             $order_ids[] = (int)$row['id'];
         }
+        $stmt_orders->close();
         
         if (!empty($order_ids)) {
             $order_ids_str = implode(',', $order_ids);
             
+            // Query untuk item bisa tetap menggunakan query biasa karena $order_ids_str aman (sudah di-cast ke int)
             $sql_items = "
                 SELECT oi.*, p.name as product_name, p.image as product_image 
                 FROM order_items oi
@@ -560,6 +605,8 @@ function get_orders_with_items_by_status($conn, $options) {
                 }
             }
         }
+    } else {
+         $stmt_orders->close();
     }
 
     return [
@@ -567,6 +614,9 @@ function get_orders_with_items_by_status($conn, $options) {
         'total' => $total_records
     ];
 }
+// =================================================================
+// --- AKHIR PERBAIKAN ---
+// =================================================================
 
 // --- FUNGSI-FUNGSI DARI FILE ASLI ANDA ---
 function create_notification($conn, $user_id, $message) {

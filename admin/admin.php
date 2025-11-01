@@ -19,11 +19,12 @@ if (!is_dir(UPLOAD_DIR_BANNER)) mkdir(UPLOAD_DIR_BANNER, 0777, true);
 if (!is_dir(UPLOAD_DIR_SETTINGS)) mkdir(UPLOAD_DIR_SETTINGS, 0777, true);
 if (!is_dir(UPLOAD_DIR_PAYMENT)) mkdir(UPLOAD_DIR_PAYMENT, 0777, true);
 if (!is_dir(UPLOAD_DIR_KATEGORI)) mkdir(UPLOAD_DIR_KATEGORI, 0777, true);
+// Buat direktori rekap jika belum ada
+if (!is_dir('rekap')) mkdir('rekap', 0777, true);
 
 
 // Fungsi helper untuk notifikasi
 function send_notification($conn, $user_id, $message) {
-    // --- PERBAIKAN: Menggunakan create_notification agar konsisten ---
     // (Asumsi 'create_notification' sudah ada di sistem.php)
     create_notification($conn, $user_id, $message);
 }
@@ -63,7 +64,7 @@ function update_or_insert_setting($conn, $key, $value) {
 }
 
 
-// --- LOGIKA BARU UNTUK UPDATE STATUS FLEKSIBEL (DARI MODAL) ---
+// --- LOGIKA UNTUK UPDATE STATUS FLEKSIBEL (DARI MODAL) ---
 if (isset($_POST['action']) && $_POST['action'] === 'flexible_update_status') {
     $is_ajax = isset($_POST['is_ajax']) && $_POST['is_ajax'] == '1';
     $redirect_url = '/admin/admin.php?' . ($_POST['active_query_string'] ?? 'page=pesanan');
@@ -85,9 +86,8 @@ if (isset($_POST['action']) && $_POST['action'] === 'flexible_update_status') {
         redirect($redirect_url);
     }
     
-    // Jika status = cancelled, alasan wajib diisi (kecuali sudah diisi)
     if ($new_status === 'cancelled' && empty($cancel_reason)) {
-        $cancel_reason = "Dibatalkan oleh Admin"; // Alasan default jika kosong
+        $cancel_reason = "Dibatalkan oleh Admin"; // Alasan default
     }
 
     // Cek apakah perlu restock
@@ -117,18 +117,16 @@ if (isset($_POST['action']) && $_POST['action'] === 'flexible_update_status') {
             $stmt_restock->close();
         }
 
-        // Update status dan alasan pembatalan (jika ada)
         if ($new_status === 'cancelled') {
             $stmt = $conn->prepare("UPDATE orders SET status = ?, cancel_reason = ? WHERE id = ?");
             $stmt->bind_param("ssi", $new_status, $cancel_reason, $order_id);
         } else {
-            // Jika diubah ke status LAIN, hapus alasan pembatalan (jika sebelumnya batal)
+            // Jika diubah ke status LAIN, hapus alasan pembatalan
             $stmt = $conn->prepare("UPDATE orders SET status = ?, cancel_reason = NULL WHERE id = ?");
             $stmt->bind_param("si", $new_status, $order_id);
         }
 
         if ($stmt->execute()) {
-            // Ambil user_id dan order_number untuk notifikasi
             $result = $conn->query("SELECT user_id, order_number FROM orders WHERE id = $order_id");
             $order = $result->fetch_assoc();
             if ($order) {
@@ -171,18 +169,18 @@ if (isset($_POST['action']) && $_POST['action'] === 'flexible_update_status') {
 
 
 // ✅ =================================================================
-// ✅ PERBAIKAN: BLOK BARU UNTUK MENANGANI AKSI 'cancel_order' (MASSAL)
+// ✅ PERBAIKAN RACE CONDITION UNTUK 'cancel_order' (MASSAL)
 // ✅ =================================================================
 if (isset($_POST['action']) && $_POST['action'] === 'cancel_order') {
     
     $is_ajax = isset($_POST['is_ajax']) && $_POST['is_ajax'] == '1';
     $redirect_url = '/admin/admin.php?' . ($_POST['active_query_string'] ?? 'page=pesanan');
     
-    // Tentukan status filter dari query string untuk validasi
     parse_str($_POST['active_query_string'], $query_params);
     $status_filter = $query_params['status'] ?? 'semua';
 
     // Validasi: Hanya izinkan pembatalan jika filternya adalah 'waiting_payment'
+    // Ini adalah lapisan pertahanan pertama, tapi pengecekan DB adalah yang utama
     if ($status_filter !== 'waiting_payment') {
         $message = 'Aksi pembatalan massal hanya diizinkan dari tab "Menunggu Pembayaran".';
         if ($is_ajax) {
@@ -214,40 +212,53 @@ if (isset($_POST['action']) && $_POST['action'] === 'cancel_order') {
     try {
         // Siapkan statement untuk mengembalikan stok
         $stmt_stock = $conn->prepare("UPDATE products p JOIN order_items oi ON p.id = oi.product_id SET p.stock = p.stock + oi.quantity WHERE oi.order_id = ?");
-        // Siapkan statement untuk membatalkan pesanan
+        
+        // KUNCI PERBAIKAN: Query ini HANYA akan membatalkan pesanan jika statusnya MASIH 'waiting_payment'
         $stmt_cancel = $conn->prepare("UPDATE orders SET status = 'cancelled', cancel_reason = 'Dibatalkan oleh Admin (Massal)' WHERE id = ? AND status = 'waiting_payment'");
         
+        $cancelled_count = 0;
+
         foreach ($order_ids as $order_id) {
-            // 1. Kembalikan stok
-            $stmt_stock->bind_param("i", $order_id);
-            $stmt_stock->execute();
             
-            // 2. Batalkan pesanan
+            // 1. Coba Batalkan pesanan (HANYA JIKA status = 'waiting_payment')
             $stmt_cancel->bind_param("i", $order_id);
             $stmt_cancel->execute();
             
-            // (Opsional) Kirim notifikasi
-            $result = $conn->query("SELECT user_id, order_number FROM orders WHERE id = $order_id");
-            $order = $result->fetch_assoc();
-            if ($order) {
-                send_notification($conn, $order['user_id'], "Pesanan #{$order['order_number']} telah dibatalkan oleh admin.");
+            // 2. Cek apakah pembatalan berhasil (artinya statusnya memang 'waiting_payment')
+            if ($stmt_cancel->affected_rows > 0) {
+                $cancelled_count++;
+
+                // 3. Kembalikan stok (HANYA JIKA berhasil dibatalkan)
+                $stmt_stock->bind_param("i", $order_id);
+                $stmt_stock->execute();
+            
+                // 4. (Opsional) Kirim notifikasi
+                $result = $conn->query("SELECT user_id, order_number FROM orders WHERE id = $order_id");
+                $order = $result->fetch_assoc();
+                if ($order) {
+                    send_notification($conn, $order['user_id'], "Pesanan #{$order['order_number']} telah dibatalkan oleh admin.");
+                }
             }
+            // Jika affected_rows == 0, artinya pesanan sudah dibayar (atau sudah dibatalkan),
+            // jadi kita tidak melakukan apa-apa (tidak restock, tidak kirim notif batal)
         }
         
         $stmt_stock->close();
         $stmt_cancel->close();
         $conn->commit();
         
-        $pesan_sukses = count($order_ids) . " pesanan berhasil dibatalkan dan stok telah dikembalikan.";
+        $pesan_sukses = $cancelled_count . " pesanan berhasil dibatalkan dan stok telah dikembalikan.";
+        // Beri tahu admin jika ada pesanan yang tidak jadi dibatalkan
+        if ($cancelled_count < count($order_ids)) {
+            $pesan_sukses .= " " . (count($order_ids) - $cancelled_count) . " pesanan tidak dibatalkan (kemungkinan sudah dibayar).";
+        }
         
-        // JIKA AJAX, KIRIM JSON
         if ($is_ajax) {
             header('Content-Type: application/json');
             echo json_encode(['success' => true, 'message' => $pesan_sukses]);
-            exit; // PENTING! Hentikan eksekusi script.
+            exit;
         }
         
-        // JIKA BUKAN AJAX
         set_flashdata('success', $pesan_sukses);
         redirect($redirect_url);
 
@@ -258,19 +269,21 @@ if (isset($_POST['action']) && $_POST['action'] === 'cancel_order') {
             header('Content-Type: application/json');
             http_response_code(500); 
             echo json_encode(['success' => false, 'message' => $message]);
-            exit; // PENTING!
+            exit;
         }
         set_flashdata('error', $message);
         redirect($redirect_url);
     }
 }
 // ✅ =================================================================
-// ✅ AKHIR BLOK PERBAIKAN
+// ✅ AKHIR BLOK PERBAIKAN 'cancel_order'
 // =================================================================
 
 
 // --- LOGIKA AKSI PESANAN TERPUSAT (BULK/MASSAL) ---
-// Blok ini sekarang menangani SEMUA AKSI LAINNYA
+// ✅ =================================================================
+// ✅ PERBAIKAN RACE CONDITION UNTUK SEMUA AKSI LAINNYA
+// ✅ =================================================================
 if (isset($_POST['action']) && in_array($_POST['action'], ['approve_payment', 'reject_payment', 'process_order', 'ship_order', 'complete_order'])) {
     
     $is_ajax = isset($_POST['is_ajax']) && $_POST['is_ajax'] == '1';
@@ -279,7 +292,7 @@ if (isset($_POST['action']) && in_array($_POST['action'], ['approve_payment', 'r
     $redirect_url = '/admin/admin.php?' . ($_POST['active_query_string'] ?? 'page=pesanan');
     
     $order_ids = [];
-    if (isset($_POST['order_id'])) { // Ini adalah aksi individu dari tombol LAMA (sekarang diganti)
+    if (isset($_POST['order_id'])) { // Ini adalah aksi individu
         $order_ids[] = (int)$_POST['order_id'];
     } elseif (isset($_POST['selected_orders']) && is_array($_POST['selected_orders'])) { // Ini dari bulk action
         $order_ids = array_map('intval', $_POST['selected_orders']);
@@ -297,32 +310,38 @@ if (isset($_POST['action']) && in_array($_POST['action'], ['approve_payment', 'r
     }
 
     $new_status = '';
+    $required_status = ''; // <-- KUNCI PERBAIKAN: Status yang diperlukan
     $success_message = '';
     $error_message = 'Gagal memperbarui pesanan.';
     $should_restock = false;
-    $cancel_reason = NULL; // --- PERUBAHAN DI SINI ---
+    $cancel_reason = NULL; 
 
     switch ($action) {
         case 'approve_payment':
             $new_status = 'belum_dicetak';
+            $required_status = 'waiting_approval'; // <-- PERBAIKAN
             $success_message = 'Pembayaran berhasil disetujui.';
             break;
         case 'reject_payment':
             $new_status = 'cancelled';
+            $required_status = 'waiting_approval'; // <-- PERBAIKAN
             $success_message = 'Pembayaran berhasil ditolak.';
             $should_restock = true;
-            $cancel_reason = 'Ditolak oleh Admin (Aksi Massal)'; // --- PERUBAHAN DI SINI ---
+            $cancel_reason = 'Ditolak oleh Admin (Aksi Massal)'; 
             break;
         case 'process_order':
             $new_status = 'processed';
+            $required_status = 'belum_dicetak'; // <-- PERBAIKAN
             $success_message = 'Pesanan berhasil diproses.';
             break;
         case 'ship_order':
             $new_status = 'shipped';
+            $required_status = 'processed'; // <-- PERBAIKAN
             $success_message = 'Pesanan berhasil dikirim.';
             break;
         case 'complete_order':
             $new_status = 'completed';
+            $required_status = 'shipped'; // <-- PERBAIKAN
             $success_message = 'Pesanan berhasil diselesaikan.';
             break;
         default:
@@ -341,6 +360,8 @@ if (isset($_POST['action']) && in_array($_POST['action'], ['approve_payment', 'r
     
     $conn->begin_transaction();
     try {
+        
+        $stmt_restock = null;
         if ($should_restock) {
             $stmt_restock = $conn->prepare("
                 UPDATE products p
@@ -348,45 +369,61 @@ if (isset($_POST['action']) && in_array($_POST['action'], ['approve_payment', 'r
                 SET p.stock = p.stock + oi.quantity
                 WHERE oi.order_id = ?
             ");
-            foreach ($order_ids as $order_id) {
-                // Hanya restock jika status LAMA BUKAN 'cancelled'
-                $result_check = $conn->query("SELECT status FROM orders WHERE id = $order_id");
-                $old_order = $result_check->fetch_assoc();
-                if ($old_order && $old_order['status'] !== 'cancelled') {
-                    $stmt_restock->bind_param("i", $order_id);
-                    $stmt_restock->execute();
-                }
-            }
-            $stmt_restock->close();
         }
 
-        // --- PERUBAHAN DI SINI ---
-        // Modifikasi query update untuk menangani 'cancel_reason'
+        // KUNCI PERBAIKAN: Tambahkan `WHERE status = ?`
         if ($new_status === 'cancelled' && $cancel_reason) {
-            $stmt = $conn->prepare("UPDATE orders SET status = ?, cancel_reason = ? WHERE id IN ($placeholders)");
-            $stmt->bind_param("ss" . $types, $new_status, $cancel_reason, ...$order_ids);
+            $stmt = $conn->prepare("UPDATE orders SET status = ?, cancel_reason = ? WHERE status = ? AND id IN ($placeholders)");
+            // Tipe: new_status (s), cancel_reason (s), required_status (s), ...ids (i, i, i...)
+            $stmt->bind_param("sss" . $types, $new_status, $cancel_reason, $required_status, ...$order_ids);
         } else {
-            // Jika status lain, hapus alasan pembatalan (jika ada)
-            $stmt = $conn->prepare("UPDATE orders SET status = ?, cancel_reason = NULL WHERE id IN ($placeholders)");
-            $stmt->bind_param("s" . $types, $new_status, ...$order_ids);
+            // Jika status lain, hapus alasan pembatalan
+            $stmt = $conn->prepare("UPDATE orders SET status = ?, cancel_reason = NULL WHERE status = ? AND id IN ($placeholders)");
+            // Tipe: new_status (s), required_status (s), ...ids (i, i, i...)
+            $stmt->bind_param("ss" . $types, $new_status, $required_status, ...$order_ids);
         }
-        // --- AKHIR PERUBAHAN ---
         
         if ($stmt->execute()) {
-            $count = $stmt->affected_rows;
+            $count = $stmt->affected_rows; // Jumlah pesanan yang *berhasil* diubah
             $status_text = ucfirst(str_replace('_', ' ', $new_status));
 
-            foreach($order_ids as $order_id) {
-                // Ambil user_id dan order_number untuk notifikasi
-                $result = $conn->query("SELECT user_id, order_number FROM orders WHERE id = $order_id");
-                $order = $result->fetch_assoc();
-                if ($order) {
+            // Hanya restock dan kirim notif untuk pesanan yang BENAR-BENAR berubah
+            if ($count > 0) {
+                 // Ambil ID pesanan yang *berhasil* diupdate untuk notif dan restock
+                 // Ini adalah cara aman untuk memastikan kita hanya memproses yg benar-benar berubah
+                
+                // ✅ PERBAIKAN SINTAKS: Query dibalik agar 'status = ?' di depan
+                $stmt_get_updated = $conn->prepare("SELECT id, user_id, order_number FROM orders WHERE status = ? AND id IN ($placeholders)");
+                // ✅ PERBAIKAN SINTAKS: $new_status (argumen posisi) harus sebelum ...$order_ids (unpacking)
+                $stmt_get_updated->bind_param("s" . $types, $new_status, ...$order_ids); 
+                $stmt_get_updated->execute();
+                $updated_orders = $stmt_get_updated->get_result()->fetch_all(MYSQLI_ASSOC);
+                $stmt_get_updated->close();
+
+                foreach($updated_orders as $order) {
+                    // 1. Restock jika perlu (HANYA untuk yg berhasil ditolak)
+                    if ($should_restock && $stmt_restock) {
+                        $stmt_restock->bind_param("i", $order['id']);
+                        $stmt_restock->execute();
+                    }
+                    // 2. Kirim Notifikasi
                     $notif_message = "Status pesanan #{$order['order_number']} diperbarui menjadi {$status_text}.";
                     send_notification($conn, $order['user_id'], $notif_message);
                 }
             }
+
+            if ($stmt_restock) {
+                $stmt_restock->close();
+            }
+            
             $conn->commit();
-            $message = ($count > 1 ? "$count pesanan " : "Pesanan ") . $success_message;
+            
+            $message = ($count > 0 ? "$count pesanan " : "Tidak ada pesanan ") . $success_message;
+            // Beri tahu admin jika ada pesanan yang tidak jadi diubah
+            if ($count < count($order_ids)) {
+                 $message .= " " . (count($order_ids) - $count) . " pesanan tidak diubah (status tidak sesuai).";
+            }
+
             if ($is_ajax) {
                 header('Content-Type: application/json');
                 echo json_encode(['success' => true, 'message' => $message]);
@@ -394,7 +431,7 @@ if (isset($_POST['action']) && in_array($_POST['action'], ['approve_payment', 'r
             }
             set_flashdata('success', $message);
         } else {
-            $conn->rollback();
+            $conn->rollback(); // Rollback jika eksekusi gagal
             $message = $error_message . ' Error DB: ' . $conn->error;
             if ($is_ajax) {
                 header('Content-Type: application/json');
@@ -416,13 +453,15 @@ if (isset($_POST['action']) && in_array($_POST['action'], ['approve_payment', 'r
     }
 
     if ($is_ajax) {
-        // Fallback for any unhandled exit
         header('Content-Type: application/json');
         echo json_encode(['success' => false, 'message' => 'Terjadi kesalahan tidak terduga.']);
         exit;
     }
     redirect($redirect_url);
 }
+// ✅ =================================================================
+// ✅ AKHIR BLOK PERBAIKAN AKSI MASSAL
+// =================================================================
 
 // --- LOGIKA CRUD PRODUK (FIXED) ---
 if (isset($_POST['save_product'])) {
@@ -439,9 +478,6 @@ if (isset($_POST['save_product'])) {
     $purchase_limit_input = (int)($_POST['purchase_limit'] ?? 0);
     $purchase_limit = ($limit_type === 'limited' && $purchase_limit_input > 0) ? $purchase_limit_input : 0;
     
-    // ============================================================
-    // KUNCI PERBAIKAN #3: CEK PERUBAHAN STOK DAN LIMIT
-    // ============================================================
     $should_reset_cycle = false;
 
     if ($product_id > 0) {
@@ -455,7 +491,6 @@ if (isset($_POST['save_product'])) {
             $old_stock = (int)$old_prod['stock'];
             $old_limit = (int)$old_prod['purchase_limit'];
             
-            // Reset cycle HANYA jika stok ATAU limit berubah
             if ($new_stock != $old_stock || $purchase_limit != $old_limit) {
                 $should_reset_cycle = true;
             }
@@ -495,7 +530,6 @@ if (isset($_POST['save_product'])) {
             $params[] = $image_name;
         }
         
-        // Reset cycle HANYA jika stok atau limit berubah
         if ($should_reset_cycle) {
             $sql .= ", last_stock_reset = NOW(), stock_cycle_id = stock_cycle_id + 1";
         }
@@ -540,26 +574,43 @@ if (isset($_POST['save_product'])) {
 if (isset($_POST['delete_product'])) {
     $product_id = (int)$_POST['product_id'];
     if ($product_id > 0) {
-        $stmt_img = $conn->prepare("SELECT image FROM products WHERE id = ?");
-        $stmt_img->bind_param("i", $product_id);
-        $stmt_img->execute();
-        $row = $stmt_img->get_result()->fetch_assoc();
-        $stmt_img->close();
-
-        $stmt = $conn->prepare("DELETE FROM products WHERE id = ?");
+        // --- PERBAIKAN (SOFT DELETE) ---
+        $stmt = $conn->prepare("UPDATE products SET is_active = 0 WHERE id = ?");
         $stmt->bind_param("i", $product_id);
         if ($stmt->execute()) {
-            if ($row && $row['image'] && file_exists(UPLOAD_DIR_PRODUK . $row['image'])) {
-                unlink(UPLOAD_DIR_PRODUK . $row['image']);
-            }
-            set_flashdata('success', 'Produk berhasil dihapus.');
+            set_flashdata('success', 'Produk berhasil dinonaktifkan (dihapus).');
         } else {
-            set_flashdata('error', 'Gagal menghapus produk.');
+            set_flashdata('error', 'Gagal menonaktifkan produk: ' . $conn->error);
         }
         $stmt->close();
+        // --- AKHIR PERBAIKAN ---
     }
     redirect('/admin/admin.php?page=produk');
 }
+
+// --- LOGIKA TOGGLE STATUS PRODUK ---
+if (isset($_POST['action']) && $_POST['action'] === 'toggle_product_status') {
+    $product_id = (int)($_POST['product_id'] ?? 0);
+    $new_status = (int)($_POST['new_status'] ?? 0); 
+    
+    if ($product_id > 0 && ($new_status === 0 || $new_status === 1)) {
+        
+        $stmt = $conn->prepare("UPDATE products SET is_active = ? WHERE id = ?");
+        $stmt->bind_param("ii", $new_status, $product_id);
+        
+        if ($stmt->execute()) {
+            set_flashdata('success', 'Status produk berhasil diperbarui.');
+        } else {
+            set_flashdata('error', 'Gagal memperbarui status produk: ' . $conn->error);
+        }
+        $stmt->close();
+    } else {
+        set_flashdata('error', 'Permintaan tidak valid.');
+    }
+    
+    redirect('/admin/admin.php?page=produk');
+}
+
 
 if (isset($_POST['save_settings'])) {
     $settings_to_update = ['store_name', 'store_description', 'store_address', 'store_phone', 'store_email', 'store_facebook', 'store_tiktok'];
@@ -692,9 +743,9 @@ $is_settings_submenu = in_array($page_name, ['pengaturan_toko', 'pengaturan_user
     <script src="https://cdn.tailwindcss.com"></script>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/5.15.4/css/all.min.css">
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/flatpickr/dist/flatpickr.min.css">
     <style>
         body { font-family: 'Inter', sans-serif; background-color: #f4f7f9; }
-        /* Style untuk sidebar di desktop, di mobile akan di-override Tailwind */
         .sidebar { min-width: 250px; } 
         .submenu-active > div { max-height: 500px; opacity: 1; transition: all 0.3s ease-in-out; }
         .submenu-inactive > div { max-height: 0; opacity: 0; overflow: hidden; transition: all 0.3s ease-in-out; }
@@ -719,16 +770,17 @@ $is_settings_submenu = in_array($page_name, ['pengaturan_toko', 'pengaturan_user
                                         transition-transform duration-300 ease-in-out">
             <div class="p-6 text-xl font-semibold border-b border-gray-700">Admin Warok Kite</div>
             <nav class="flex-grow p-4 space-y-2">
-                <a href="?page=dashboard" class="flex items-center p-3 rounded-lg <?= $page_name == 'dashboard' ? 'bg-indigo-600 font-bold' : 'hover:bg-gray-700' ?>">Dashboard</a>
-                <a href="?page=pesanan" class="flex items-center p-3 rounded-lg <?= $page_name == 'pesanan' ? 'bg-indigo-600 font-bold' : 'hover:bg-gray-700' ?>">Pesanan</a>
-                <a href="?page=produk" class="flex items-center p-3 rounded-lg <?= $page_name == 'produk' ? 'bg-indigo-600 font-bold' : 'hover:bg-gray-700' ?>">Produk</a>
-                <a href="?page=kategori" class="flex items-center p-3 rounded-lg <?= $page_name == 'kategori' ? 'bg-indigo-600 font-bold' : 'hover:bg-gray-700' ?>">Kategori</a>
-                <a href="?page=banner" class="flex items-center p-3 rounded-lg <?= $page_name == 'banner' ? 'bg-indigo-600 font-bold' : 'hover:bg-gray-700' ?>">Banner</a>
-                <a href="?page=pembayaran" class="flex items-center p-3 rounded-lg <?= $page_name == 'pembayaran' ? 'bg-indigo-600 font-bold' : 'hover:bg-gray-700' ?>">Pembayaran</a>
+                <a href="?page=dashboard" class="flex items-center p-3 rounded-lg <?= $page_name == 'dashboard' ? 'bg-indigo-600 font-bold' : 'hover:bg-gray-700' ?>"><i class="fas fa-tachometer-alt mr-2 w-5"></i> Dashboard</a>
+                <a href="?page=pesanan" class="flex items-center p-3 rounded-lg <?= $page_name == 'pesanan' ? 'bg-indigo-600 font-bold' : 'hover:bg-gray-700' ?>"><i class="fas fa-shopping-cart mr-2 w-5"></i> Pesanan</a>
+                <a href="?page=produk" class="flex items-center p-3 rounded-lg <?= $page_name == 'produk' ? 'bg-indigo-600 font-bold' : 'hover:bg-gray-700' ?>"><i class="fas fa-box mr-2 w-5"></i> Produk</a>
+                <a href="?page=kategori" class="flex items-center p-3 rounded-lg <?= $page_name == 'kategori' ? 'bg-indigo-600 font-bold' : 'hover:bg-gray-700' ?>"><i class="fas fa-tags mr-2 w-5"></i> Kategori</a>
+                <a href="?page=banner" class="flex items-center p-3 rounded-lg <?= $page_name == 'banner' ? 'bg-indigo-600 font-bold' : 'hover:bg-gray-700' ?>"><i class="fas fa-images mr-2 w-5"></i> Banner</a>
+                <a href="?page=pembayaran" class="flex items-center p-3 rounded-lg <?= $page_name == 'pembayaran' ? 'bg-indigo-600 font-bold' : 'hover:bg-gray-700' ?>"><i class="fas fa-credit-card mr-2 w-5"></i> Pembayaran</a>
+                <a href="?page=rekap" class="flex items-center p-3 rounded-lg <?= $page_name == 'rekap' ? 'bg-indigo-600 font-bold' : 'hover:bg-gray-700' ?>"><i class="fas fa-file-alt mr-2 w-5"></i> Rekap Laporan</a>
                 
                 <div id="settings-menu" class="submenu-inactive">
                     <button type="button" class="flex items-center justify-between w-full p-3 rounded-lg text-left <?= $is_settings_submenu ? 'bg-indigo-700 font-bold' : 'hover:bg-gray-700' ?>" onclick="toggleSettingsMenu()">
-                        <span><i class="fas fa-cog mr-2"></i> Pengaturan</span>
+                        <span><i class="fas fa-cog mr-2 w-5"></i> Pengaturan</span>
                         <svg id="settings-arrow" class="w-4 h-4 transition-transform duration-300 transform" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"></path></svg>
                     </button>
                     <div class="mt-1 ml-4 space-y-1 overflow-hidden">
@@ -751,6 +803,7 @@ $is_settings_submenu = in_array($page_name, ['pengaturan_toko', 'pengaturan_user
                     $page_title_map = [
                         'dashboard' => 'Dashboard', 'pesanan' => 'Manajemen Pesanan', 'produk' => 'Manajemen Produk',
                         'kategori' => 'Manajemen Kategori', 'banner' => 'Manajemen Banner', 'pembayaran' => 'Metode Pembayaran',
+                        'rekap' => 'Rekap Laporan',
                         'pengaturan_toko' => 'Pengaturan Toko', 'pengaturan_user' => 'Manajemen Pengguna'
                     ];
                     echo $page_title_map[$page_name] ?? 'Halaman Tidak Ditemukan';
@@ -761,8 +814,10 @@ $is_settings_submenu = in_array($page_name, ['pengaturan_toko', 'pengaturan_user
                 $file_map = [
                     'dashboard' => 'dashboard.php', 'pesanan' => 'pesanan/pesanan.php', 'produk' => 'produk/produk.php',
                     'kategori' => 'kategori/kategori.php', 'banner' => 'banner/banner.php', 'pembayaran' => 'pembayaran/pembayaran.php',
+                    'rekap' => 'rekap/rekap.php',
                     'pengaturan_toko' => 'pengaturan/pengaturan.php', 'pengaturan_user' => 'user/user.php',
                 ];
+
                 if (in_array($page_name, $allowed_pages)) {
                     $include_file = $file_map[$page_name];
                     if (file_exists($include_file)) {
@@ -778,8 +833,10 @@ $is_settings_submenu = in_array($page_name, ['pengaturan_toko', 'pengaturan_user
         </main>
     </div>
 
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/flatpickr"></script>
+
     <script>
-        // Script untuk Submenu Settings (Sudah ada)
         function toggleSettingsMenu() {
             const menu = document.getElementById('settings-menu');
             const arrow = document.getElementById('settings-arrow');
@@ -798,7 +855,6 @@ $is_settings_submenu = in_array($page_name, ['pengaturan_toko', 'pengaturan_user
             }
         });
 
-        // --- SCRIPT BARU UNTUK SIDEBAR MOBILE ---
         const sidebar = document.getElementById('admin-sidebar');
         const toggleBtn = document.getElementById('sidebar-toggle');
         const openIcon = document.getElementById('sidebar-open-icon');
@@ -811,13 +867,11 @@ $is_settings_submenu = in_array($page_name, ['pengaturan_toko', 'pengaturan_user
             closeIcon.classList.toggle('hidden');
         }
 
-        // Buka/tutup sidebar saat tombol hamburger diklik
         toggleBtn.addEventListener('click', (e) => {
-            e.stopPropagation(); // Mencegah event klik sampai ke mainContent
+            e.stopPropagation(); 
             toggleSidebar();
         });
 
-        // Tutup sidebar saat area konten utama diklik (hanya di mobile)
         mainContent.addEventListener('click', () => {
             if (!sidebar.classList.contains('-translate-x-full') && window.innerWidth < 768) {
                 toggleSidebar();

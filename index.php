@@ -8,28 +8,35 @@ require_once 'partial/partial.php';
 load_settings($conn);
 
 // =================================================================
-// LOGIKA PENCARIAN & TAMPILAN PRODUKKKK
+// LOGIKA PENCARIAN & TAMPILAN PRODUK
 // =================================================================
 $search_query = isset($_GET['s']) ? sanitize_input($_GET['s']) : '';
 $is_searching = !empty($search_query);
 
 $products = [];
-// ✅ PERUBAHAN: Menghapus 'WHERE p.stock > 0'
+// ✅ PERUBAHAN: Query diubah untuk memfilter is_active = 1 DAN mengurutkan stok
 $base_product_query = "
     SELECT p.*, SUM(oi.quantity) as total_sold
     FROM products p
     LEFT JOIN order_items oi ON p.id = oi.product_id
     LEFT JOIN orders o ON oi.order_id = o.id AND o.status IN ('completed', 'shipped', 'processed', 'belum_dicetak')
-"; // <-- Klausa 'WHERE' dihapus dari sini
+";
 
 if ($is_searching) {
     $search_param = "%{$search_query}%";
-    // Tambahkan 'WHERE' di sini karena base query sudah tidak memilikinya
-    $stmt = $conn->prepare($base_product_query . " WHERE p.name LIKE ? GROUP BY p.id ORDER BY p.created_at DESC");
+    // ✅ PERBAIKAN: Tambahkan p.is_active = 1 DAN ubah ORDER BY
+    $stmt = $conn->prepare($base_product_query . " 
+        WHERE p.name LIKE ? AND p.is_active = 1 
+        GROUP BY p.id 
+        ORDER BY (p.stock <= 0) ASC, p.created_at DESC");
     $stmt->bind_param("s", $search_param);
 } else {
-    // Langsung GROUP BY karena tidak ada filter 'WHERE'
-    $stmt = $conn->prepare($base_product_query . " GROUP BY p.id ORDER BY p.created_at DESC LIMIT 12");
+    // ✅ PERBAIKAN: Tambahkan p.is_active = 1 DAN ubah ORDER BY
+    $stmt = $conn->prepare($base_product_query . " 
+        WHERE p.is_active = 1 
+        GROUP BY p.id 
+        ORDER BY (p.stock <= 0) ASC, p.created_at DESC 
+        LIMIT 12");
 }
 $stmt->execute();
 $result = $stmt->get_result();
@@ -40,18 +47,22 @@ $stmt->close();
 
 
 // ✅ PERBAIKAN QUERY: Menghitung jumlah terjual untuk setiap kategori
+// ✅ PERBAIKAN: Filter kategori juga harus dari produk yang aktif
 $categories = [];
 if (!$is_searching) {
     $cat_result = $conn->query("
         SELECT c.*, SUM(oi.quantity) as total_sold
         FROM categories c
-        LEFT JOIN products p ON c.id = p.category_id
+        LEFT JOIN products p ON c.id = p.category_id AND p.is_active = 1
         LEFT JOIN order_items oi ON p.id = oi.product_id
         LEFT JOIN orders o ON oi.order_id = o.id AND o.status IN ('completed', 'shipped', 'processed', 'belum_dicetak')
         GROUP BY c.id
         ORDER BY c.name ASC
     ");
     if ($cat_result) {
+        // ✅ ===============================================
+        // ✅ KESALAHAN SYNTAX SEBELUMNYA ADA DI SINI, SUDAH DIPERBAIKI
+        // ✅ ===============================================
         while ($row = $cat_result->fetch_assoc()) $categories[] = $row;
     }
 }

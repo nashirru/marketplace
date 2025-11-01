@@ -84,16 +84,16 @@ $page_title = 'Checkout - ' . (get_setting($conn, 'store_name') ?? 'Warok Kite')
                 </div>
                 <?php endif; ?>
                 <div id="address-form-fields">
-                     <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
                         <div><label for="full_name" class="block text-sm font-medium text-gray-700 mb-1">Nama Lengkap</label><input type="text" id="full_name" name="full_name" class="w-full p-2 border rounded-md" required></div>
                         <div><label for="phone_number" class="block text-sm font-medium text-gray-700 mb-1">Nomor Telepon</label><input type="tel" id="phone_number" name="phone_number" class="w-full p-2 border rounded-md" required></div>
                     </div>
                     <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 mb-4">
                         <div><label for="province" class="block text-sm font-medium text-gray-700 mb-1">Provinsi</label><input type="text" id="province" name="province" class="w-full p-2 border rounded-md" required></div>
                         <div><label for="city" class="block text-sm font-medium text-gray-700 mb-1">Kota/Kabupaten</label><input type="text" id="city" name="city" class="w-full p-2 border rounded-md" required></div>
-                         <div><label for="postal_code" class="block text-sm font-medium text-gray-700 mb-1">Kode Pos</label><input type="text" id="postal_code" name="postal_code" class="w-full p-2 border rounded-md"></div>
+                        <div><label for="postal_code" class="block text-sm font-medium text-gray-700 mb-1">Kode Pos</label><input type="text" id="postal_code" name="postal_code" class="w-full p-2 border rounded-md"></div>
                     </div>
-                     <div class="mb-4"><label for="subdistrict" class="block text-sm font-medium text-gray-700 mb-1">Kecamatan</label><input type="text" id="subdistrict" name="subdistrict" class="w-full p-2 border rounded-md"></div>
+                    <div class="mb-4"><label for="subdistrict" class="block text-sm font-medium text-gray-700 mb-1">Kecamatan</label><input type="text" id="subdistrict" name="subdistrict" class="w-full p-2 border rounded-md"></div>
                     <div class="mb-4"><label for="address_line_1" class="block text-sm font-medium text-gray-700 mb-1">Alamat Lengkap</label><textarea id="address_line_1" name="address_line_1" rows="3" class="w-full p-2 border rounded-md" placeholder="Nama jalan, nomor rumah, RT/RW" required></textarea></div>
                     <div class="mb-4"><label for="address_line_2" class="block text-sm font-medium text-gray-700 mb-1">Catatan (Opsional)</label><input type="text" id="address_line_2" name="address_line_2" class="w-full p-2 border rounded-md" placeholder="Cth: Blok/unit no., patokan"></div>
                     <div class="flex items-center" id="is-default-container"><input type="checkbox" id="is_default" name="is_default" class="h-4 w-4 text-indigo-600 border-gray-300 rounded"><label for="is_default" class="ml-2 block text-sm text-gray-900">Jadikan alamat utama</label></div>
@@ -116,7 +116,7 @@ $page_title = 'Checkout - ' . (get_setting($conn, 'store_name') ?? 'Warok Kite')
                 </div>
                 <div class="space-y-2 pt-4 border-t mt-4">
                     <div class="flex justify-between text-gray-700"><span>Subtotal Produk</span><span><?= format_rupiah($cart['subtotal']) ?></span></div>
-                    <div class="flex justify-between text-gray-700"><span>Ongkir</span><span>Ditanggung pembeli</span></div>
+                    <div class="flex justify-between text-gray-700"><span>Biaya Pengiriman</span><span>-</span></div>
                     <div class="flex justify-between text-xl font-bold text-indigo-800 pt-2 border-t mt-2"><span>TOTAL</span><span><?= format_rupiah($cart['subtotal']) ?></span></div>
                 </div>
                 <button type="submit" id="submit-button" class="mt-6 w-full px-4 py-3 bg-indigo-600 text-white font-bold rounded-lg hover:bg-indigo-700 transition">Lanjutkan ke Pembayaran</button>

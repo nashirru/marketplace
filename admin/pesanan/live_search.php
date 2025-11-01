@@ -12,6 +12,31 @@ $limit = max(1, (int)($_GET['limit'] ?? 10));
 $status_filter = $_GET['status'] ?? 'semua'; // 'status' dari JS
 $search_query = $_GET['q'] ?? ''; // 'q' dari JS
 
+
+// --- PERUBAHAN BARU: PENGATURAN FILTER TANGGAL ---
+$period = $_GET['period'] ?? 'week'; // Default 'week' sesuai permintaan
+$start_date = $_GET['start_date'] ?? '';
+$end_date = $_GET['end_date'] ?? '';
+
+// Tentukan rentang tanggal berdasarkan $period jika bukan 'custom'
+// Ini memastikan $start_date dan $end_date selalu benar
+if ($period === 'week') {
+    // 1 Minggu terakhir (6 hari lalu + hari ini = 7 hari)
+    $start_date = date('Y-m-d', strtotime('-6 days'));
+    $end_date = date('Y-m-d'); // Hari ini
+} elseif ($period === 'month') {
+    // 1 Bulan terakhir (misal: 1 Okt - 1 Nov)
+    $start_date = date('Y-m-d', strtotime('-1 month'));
+    $end_date = date('Y-m-d');
+} elseif ($period === 'all') {
+    // Semua waktu
+    $start_date = '';
+    $end_date = '';
+}
+// Jika $period === 'custom', $start_date dan $end_date sudah diisi dari JS
+// --- AKHIR PERUBAHAN BARU ---
+
+
 $allowed_statuses = ['semua', 'waiting_payment', 'waiting_approval', 'belum_dicetak', 'processed', 'shipped', 'completed', 'cancelled'];
 if (!in_array($status_filter, $allowed_statuses)) {
     $status_filter = 'semua';
@@ -24,18 +49,54 @@ $status_map = [
 ];
 
 // Opsi Aksi Massal (perlu didefinisikan untuk order_rows.php)
-// --- PERBAIKAN DI SINI ---
-// Tambahkan 'waiting_payment' ke daftar status yang punya bulk action
+// PERBAIKAN: Tambahkan 'waiting_payment' ke daftar
 $bulk_action_options = in_array($status_filter, ['waiting_payment', 'waiting_approval', 'belum_dicetak', 'processed', 'shipped']);
-// --- AKHIR PERBAIKAN ---
 
 // --- PENGAMBILAN DATA (Menggunakan fungsi konsisten) ---
-$data = get_orders_with_items_by_status($conn, [
+
+// =================================================================
+// PERHATIAN PENTING (IQ 170):
+// =================================================================
+// Array `$options` di bawah ini sekarang mengirimkan 'start_date' dan 'end_date'
+// ke fungsi `get_orders_with_items_by_status()` yang ada di file `sistem.php`
+// (yang tidak Anda berikan).
+//
+// AGAR FILTER INI BERFUNGSI, Anda HARUS memodifikasi file `sistem.php`
+// agar fungsi `get_orders_with_items_by_status()` bisa MEMBACA parameter ini
+// dan menambahkannya ke query SQL.
+//
+// CARI FUNGSI: `get_orders_with_items_by_status($conn, $options)` di `sistem.php`
+//
+// TAMBAHKAN LOGIKA INI DI DALAM FUNGSI TERSEBUT:
+/*
+    // ... (di dalam fungsi, setelah mengambil $options)
+    $start_date = $options['start_date'] ?? '';
+    $end_date = $options['end_date'] ?? '';
+
+    // ... (di bagian $where_clauses[] = ...)
+    if (!empty($start_date) && !empty($end_date)) {
+        // Gunakan DATE() untuk membandingkan tanggal saja, mengabaikan jam
+        $where_clauses[] = "DATE(o.created_at) BETWEEN ? AND ?";
+        
+        // Tambahkan ke $params dan $types (sesuaikan nama variabelnya)
+        $params[] = $start_date;
+        $params[] = $end_date;
+        $types .= "ss"; 
+    }
+    // Jika 'all time', $start_date akan kosong, jadi tidak ada filter
+*/
+// =================================================================
+
+$options = [
     'status' => $status_filter,
     'search' => $search_query,
     'limit' => $limit,
-    'page' => $current_page // 'page' adalah parameter yang benar untuk fungsi ini
-]);
+    'p' => $current_page,
+    'start_date' => $start_date, // <-- PARAMETER BARU
+    'end_date' => $end_date      // <-- PARAMETER BARU
+];
+
+$data = get_orders_with_items_by_status($conn, $options);
 $orders = $data['orders'];
 $total_records = $data['total'];
 $total_pages = max(1, ceil($total_records / $limit)); // Minimal 1 halaman
@@ -119,6 +180,7 @@ echo json_encode([
     'total_results' => $total_records,
     'start_index' => $start_index,
     'end_index' => $end_index,
-    'debug_status' => $status_filter // untuk debug
+    'debug_status' => $status_filter, // untuk debug
+    'debug_dates' => "Start: $start_date, End: $end_date" // Debug tanggal
 ]);
 ?>
