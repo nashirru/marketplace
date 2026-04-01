@@ -28,7 +28,7 @@ if (!$snapToken) {
     <title>Proses Pembayaran</title>
     <!-- Script Midtrans Snap.js -->
     <script type="text/javascript"
-            src="https://app.sandbox.midtrans.com/snap/snap.js"
+            src="<?= htmlspecialchars(midtrans_snap_js_url(), ENT_QUOTES, 'UTF-8') ?>"
             data-client-key="<?php echo \Midtrans\Config::$clientKey; ?>"></script>
     <style>
         body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, 'Open Sans', 'Helvetica Neue', sans-serif; display: flex; justify-content: center; align-items: center; height: 100vh; background-color: #f0f2f5; margin: 0; }

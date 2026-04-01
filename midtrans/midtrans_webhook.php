@@ -62,9 +62,10 @@ try {
     $stmt_get_order->close();
 
     if (!$order_data) {
-        http_response_code(404);
-        error_log("Midtrans Webhook: Order not found for attempt: $attempt_order_number"); // Log error standar
-        die("Order not found.");
+        http_response_code(200);
+        error_log("Midtrans Webhook: Order not found for attempt: $attempt_order_number");
+        echo "OK (Order Not Found)";
+        exit;
     }
 
     $order_id = $order_data['order_id'];
@@ -74,8 +75,14 @@ try {
 
     try {
         // Lock row
-        $current_status_res = $conn->query("SELECT status, user_id FROM orders WHERE id=$order_id FOR UPDATE");
-        $current_order = $current_status_res->fetch_assoc();
+        $stmt_lock_order = $conn->prepare("SELECT status, user_id FROM orders WHERE id = ? FOR UPDATE");
+        $stmt_lock_order->bind_param("i", $order_id);
+        $stmt_lock_order->execute();
+        $current_order = $stmt_lock_order->get_result()->fetch_assoc();
+        $stmt_lock_order->close();
+        if (!$current_order) {
+            throw new Exception("Order data not found during lock.");
+        }
         $current_status = $current_order['status'];
         $user_id = $current_order['user_id'];
 
@@ -156,20 +163,30 @@ try {
             // KEMBALIKAN STOK (JIKA DIBATALKAN)
             if ($new_status === 'cancelled') {
                 
-                $stmt_items = $conn->prepare("SELECT product_id, quantity FROM order_items WHERE order_id = ?");
+                $stmt_items = $conn->prepare("SELECT product_id, variation_id, quantity FROM order_items WHERE order_id = ?");
                 $stmt_items->bind_param("i", $order_id);
                 $stmt_items->execute();
                 $order_items = $stmt_items->get_result()->fetch_all(MYSQLI_ASSOC);
                 $stmt_items->close();
                 
-                $stmt_restock = $conn->prepare("UPDATE products SET stock = stock + ? WHERE id = ?");
+                $stmt_restock_product = $conn->prepare("UPDATE products SET stock = stock + ? WHERE id = ?");
+                $stmt_restock_variation = $conn->prepare("UPDATE product_variations SET stock = stock + ? WHERE id = ?");
                 foreach ($order_items as $item) {
-                    $stmt_restock->bind_param("ii", $item['quantity'], $item['product_id']);
-                    if (!$stmt_restock->execute()) {
-                        error_log("Midtrans Webhook: Failed to restock Product {$item['product_id']}: " . $stmt_restock->error);
+                    $variation_id = isset($item['variation_id']) ? (int)$item['variation_id'] : 0;
+                    if ($variation_id > 0) {
+                        $stmt_restock_variation->bind_param("ii", $item['quantity'], $variation_id);
+                        if (!$stmt_restock_variation->execute()) {
+                            error_log("Midtrans Webhook: Failed to restock Variation {$variation_id}: " . $stmt_restock_variation->error);
+                        }
+                    } else {
+                        $stmt_restock_product->bind_param("ii", $item['quantity'], $item['product_id']);
+                        if (!$stmt_restock_product->execute()) {
+                            error_log("Midtrans Webhook: Failed to restock Product {$item['product_id']}: " . $stmt_restock_product->error);
+                        }
                     }
                 }
-                $stmt_restock->close();
+                $stmt_restock_product->close();
+                $stmt_restock_variation->close();
 
                 create_notification($conn, $user_id, "Pembayaran dibatalkan atau kedaluwarsa. Stok telah dikembalikan.");
             }

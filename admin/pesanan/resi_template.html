@@ -86,6 +86,11 @@
                                     <td style="width: 3%; vertical-align: top;" class="font-large">:</td>
                                     <td style="width: 72%; vertical-align: top; word-wrap: break-word; overflow-wrap: break-word;" class="font-large">{{PENERIMA_ALAMAT}}</td>
                                 </tr>
+                                <tr>
+                                    <td style="width: 25%; vertical-align: top;" class="font-large"><strong>Catatan</strong></td>
+                                    <td style="width: 3%; vertical-align: top;" class="font-large">:</td>
+                                    <td style="width: 72%; vertical-align: top; word-wrap: break-word; overflow-wrap: break-word;" class="font-medium">{{CUSTOMER_NOTE}}</td>
+                                </tr>
                             </table>
                         </td>
                     </tr>
@@ -102,6 +107,9 @@
                     <!-- Info Produk -->
                     <tr>
                         <td>
+                            <div style="text-align: left; padding-bottom: 2px;" class="font-medium">
+                                <strong>Dicetak:</strong> {{PRINTED_AT}}
+                            </div>
                             <div style="text-align: right; padding-bottom: 5px;" class="font-medium">
                                 <strong>INV. NO. :</strong> #{{ORDER_NUMBER}}
                             </div>
@@ -143,3 +151,4 @@
     </table>
 </body>
 </html>
+

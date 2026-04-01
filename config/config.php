@@ -1,16 +1,87 @@
 <?php
 // File: config/config.php
 
+if (!function_exists('app_load_dotenv')) {
+    function app_load_dotenv($path) {
+        if (!is_readable($path)) {
+            return;
+        }
+        $lines = file($path, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES);
+        if ($lines === false) {
+            return;
+        }
+        foreach ($lines as $line) {
+            $trimmed = trim($line);
+            if ($trimmed === '' || strpos($trimmed, '#') === 0) {
+                continue;
+            }
+            $eqPos = strpos($trimmed, '=');
+            if ($eqPos === false) {
+                continue;
+            }
+            $name = trim(substr($trimmed, 0, $eqPos));
+            $value = trim(substr($trimmed, $eqPos + 1));
+            if ($name === '') {
+                continue;
+            }
+            if ((substr($value, 0, 1) === '"' && substr($value, -1) === '"') ||
+                (substr($value, 0, 1) === "'" && substr($value, -1) === "'")) {
+                $value = substr($value, 1, -1);
+            }
+            if (!array_key_exists($name, $_ENV)) {
+                $_ENV[$name] = $value;
+            }
+            if (!array_key_exists($name, $_SERVER)) {
+                $_SERVER[$name] = $value;
+            }
+            if (getenv($name) === false) {
+                putenv($name . '=' . $value);
+            }
+        }
+    }
+}
+
+$projectRoot = dirname(__DIR__);
+app_load_dotenv($projectRoot . '/.env');
+app_load_dotenv($projectRoot . '/.env.local');
+
 // --- Pengaturan Aplikasi ---
-// Ubah '/warok' sesuai dengan nama folder proyek Anda di localhost.
-// Jika proyek ada di root (http://localhost/), cukup ubah menjadi ''.
-define('BASE_URL', 'https://warokkite.com');
+// Prioritas:
+// 1) APP_BASE_URL dari environment (.env / server env)
+// 2) Auto-detect dari request aktif
+$envBaseUrl = getenv('APP_BASE_URL');
+if (!defined('BASE_URL')) {
+    if (is_string($envBaseUrl) && trim($envBaseUrl) !== '') {
+        define('BASE_URL', rtrim(trim($envBaseUrl), '/'));
+    } else {
+        $protocol = (
+            (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off')
+            || (isset($_SERVER['SERVER_PORT']) && (int)$_SERVER['SERVER_PORT'] === 443)
+        ) ? 'https://' : 'http://';
+        $host = $_SERVER['HTTP_HOST'] ?? 'localhost';
+        $projectBase = '';
+        $docRoot = isset($_SERVER['DOCUMENT_ROOT']) ? rtrim(str_replace('\\', '/', $_SERVER['DOCUMENT_ROOT']), '/') : '';
+        $projectRootNormalized = rtrim(str_replace('\\', '/', $projectRoot), '/');
+
+        if ($docRoot !== '' && stripos($projectRootNormalized, $docRoot) === 0) {
+            $projectBase = substr($projectRootNormalized, strlen($docRoot));
+        }
+
+        if ($projectBase === '' || $projectBase === false) {
+            $scriptPath = $_SERVER['SCRIPT_NAME'] ?? '/';
+            $projectBase = dirname(dirname($scriptPath));
+        }
+
+        $projectBase = rtrim(str_replace('\\', '/', (string)$projectBase), '/');
+        define('BASE_URL', $protocol . $host . ($projectBase === '' ? '' : $projectBase));
+    }
+}
 
 // --- Pengaturan Koneksi Database ---
 define('DB_HOST', 'localhost');
-define('DB_USER', 'u111743367_root');
-define('DB_PASS', 'Warokwarokr00t');
-define('DB_NAME', 'u111743367_warokkite');
+define('DB_USER', 'root');
+define('DB_PASS', '');
+define('DB_NAME', 'publi');
 
 // --- Buat Koneksi ---
 $conn = new mysqli(DB_HOST, DB_USER, DB_PASS, DB_NAME);

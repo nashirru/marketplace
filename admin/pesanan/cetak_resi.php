@@ -1,9 +1,6 @@
 <?php
 // File: admin/pesanan/cetak_resi.php
-// VERSI ULTIMATE FIX IQ 180: Robust Variation Printing
-// PERBAIKAN: Update format tampilan variasi menjadi (variasi : "nama")
 
-// Sertakan file konfigurasi, sistem, dan autoloader Dompdf
 include '../../config/config.php';
 include '../../sistem/sistem.php';
 require_once dirname(__DIR__, 2) . '/vendor/autoload.php';
@@ -101,6 +98,8 @@ if (!file_exists($template_html_path)) {
 }
 $template_html = file_get_contents($template_html_path);
 $all_receipts_html = '';
+$printed_at_wib = new DateTime('now', new DateTimeZone('Asia/Jakarta'));
+$printed_at_label = $printed_at_wib->format('d M Y H:i:s') . ' WIB';
 
 foreach ($orders_to_print as $order) {
     // 4. AMBIL ITEM PESANAN DENGAN VARIASI (LOGIKA PERBAIKAN)
@@ -135,7 +134,6 @@ foreach ($orders_to_print as $order) {
         $order_items = $result_items->fetch_all(MYSQLI_ASSOC);
         $stmt_items->close();
     }
-
     $items_html = '';
     $no = 1;
     foreach ($order_items as $item) {
@@ -163,6 +161,11 @@ foreach ($orders_to_print as $order) {
                     ', ' . htmlspecialchars_decode($order['province'], ENT_QUOTES) . ' ' . htmlspecialchars_decode($order['postal_code'], ENT_QUOTES);
     
     $full_address = str_replace(["\r\n", "\r", "\n"], ' ', $full_address);
+    $customer_note = trim((string)($order['customer_note'] ?? ''));
+    if ($customer_note === '') {
+        $customer_note = '-';
+    }
+    $customer_note = str_replace(["\r\n", "\r", "\n"], ' ', htmlspecialchars_decode($customer_note, ENT_QUOTES));
 
     $placeholders = [
         '{{NAMA_PENGIRIM}}'    => htmlspecialchars_decode($store_name, ENT_QUOTES),
@@ -170,11 +173,14 @@ foreach ($orders_to_print as $order) {
         '{{PENERIMA_NAMA}}'    => htmlspecialchars_decode(strtoupper($order['full_name']), ENT_QUOTES),
         '{{PENERIMA_HP}}'      => htmlspecialchars_decode($order['phone_number'], ENT_QUOTES),
         '{{PENERIMA_ALAMAT}}'  => $full_address,
+        '{{CUSTOMER_NOTE}}'    => $customer_note,
         '{{ORDER_NUMBER}}'     => htmlspecialchars_decode($order['order_number'], ENT_QUOTES),
+        '{{PRINTED_AT}}'      => htmlspecialchars($printed_at_label),
         '{{PRODUK_ITEMS}}'     => $items_html,
     ];
     
-    $all_receipts_html .= '<div class="receipt-wrapper">' . str_replace(array_keys($placeholders), array_values($placeholders), $template_html) . '</div>';
+    $receipt_html = str_replace(array_keys($placeholders), array_values($placeholders), $template_html);
+    $all_receipts_html .= '<div class="receipt-wrapper">' . $receipt_html . '</div>';
 }
 
 $conn->close();
@@ -202,3 +208,8 @@ $dompdf->setPaper($custom_paper);
 $dompdf->render();
 $dompdf->stream($filename, ["Attachment" => false]);
 ?>
+
+
+
+
+

@@ -90,17 +90,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
             $stmt_restock_var = $conn->prepare("UPDATE product_variations SET stock = stock + ? WHERE id = ?");
 
             foreach ($items as $item) {
-                // Logika Restock Cerdas: 
-                // 1. Jika item memiliki variasi, kembalikan stok ke tabel product_variations
-                if (!empty($item['variation_id'])) {
-                    $stmt_restock_var->bind_param("ii", $item['quantity'], $item['variation_id']);
+                // Jika item punya variasi, restock hanya variasi.
+                $variation_id = isset($item['variation_id']) ? (int)$item['variation_id'] : 0;
+                if ($variation_id > 0) {
+                    $stmt_restock_var->bind_param("ii", $item['quantity'], $variation_id);
                     $stmt_restock_var->execute();
-                } 
-                
-                // 2. Selalu kembalikan stok ke tabel master products (jika sistem Anda mengurangi keduanya)
-                // Atau jika produk simple, ini wajib.
-                $stmt_restock_prod->bind_param("ii", $item['quantity'], $item['product_id']);
-                $stmt_restock_prod->execute();
+                } else {
+                    $stmt_restock_prod->bind_param("ii", $item['quantity'], $item['product_id']);
+                    $stmt_restock_prod->execute();
+                }
             }
             
             // Tutup statement restock
@@ -385,7 +383,7 @@ $page_title = "Profil Saya";
 <html lang="id">
 <?php page_head($page_title, $conn); ?>
 <!-- Integrasi Midtrans Snap JS dengan Timestamp Cache Buster -->
-<script src="https://app.midtrans.com/snap/snap.js?v=<?= time() ?>" data-client-key="<?= htmlspecialchars(\Midtrans\Config::$clientKey); ?>"></script>
+<script src="<?= htmlspecialchars(midtrans_snap_js_url(), ENT_QUOTES, 'UTF-8') ?>" data-client-key="<?= htmlspecialchars(\Midtrans\Config::$clientKey); ?>"></script>
 
 <body class="bg-white text-gray-800">
 

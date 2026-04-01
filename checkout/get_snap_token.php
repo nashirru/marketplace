@@ -57,7 +57,7 @@ try {
     // Menggunakan LEFT JOIN ke product_variations untuk mendapatkan nama variasi
     $order_items = [];
     $sql_items = "
-        SELECT oi.id, oi.price, oi.quantity, 
+        SELECT oi.id, oi.product_id, oi.variation_id, oi.price, oi.quantity, 
                p.name as product_name, 
                pv.name as variation_name
         FROM order_items oi
@@ -91,8 +91,13 @@ try {
             $item_name .= " (" . $item['variation_name'] . ")";
         }
 
+        $variation_id = isset($item['variation_id']) ? (int)$item['variation_id'] : 0;
+        $item_id = $variation_id > 0
+            ? ((string)$item['product_id'] . '-' . (string)$variation_id)
+            : (string)$item['product_id'];
+
         $midtrans_items[] = [
-            'id'       => $item['id'],
+            'id'       => $item_id,
             'price'    => (int)$item['price'],
             'quantity' => (int)$item['quantity'],
             'name'     => substr($item_name, 0, 50) // Midtrans limit 50 chars

@@ -108,7 +108,7 @@ function handle_get_detail($conn) {
     $sql = "SELECT 
                 o.id, o.order_number, o.total, o.status, o.created_at, 
                 o.midtrans_payment_type, o.shipping_fee_actual, o.tracking_number,
-                o.full_name, o.phone_number, o.address_line_1, o.city, o.province, o.postal_code,
+                o.full_name, o.phone_number, o.address_line_1, o.city, o.province, o.postal_code, o.customer_note,
                 u.name as user_name, u.email as user_email
             FROM orders o
             LEFT JOIN users u ON o.user_id = u.id
@@ -380,7 +380,11 @@ function handle_flexible_update($conn) {
         if (function_exists('perform_safe_cancel')) {
             // Kita butuh server key midtrans
             // Ambil dari Config jika belum ada
-            $serverKey = \Midtrans\Config::$serverKey ?? 'SB-Mid-server-xxx'; // Fallback atau ambil dari DB
+            $serverKey = \Midtrans\Config::$serverKey ?? '';
+            if (empty($serverKey)) {
+                send_response(false, "Midtrans server key belum dikonfigurasi.");
+                return;
+            }
             $isProduction = \Midtrans\Config::$isProduction ?? false;
 
             // Jalankan Safe Cancel

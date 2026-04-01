@@ -73,7 +73,7 @@ $page_title = 'Checkout - ' . (get_setting($conn, 'store_name') ?? 'Warok Kite')
 <html lang="id">
 <?php page_head($page_title, $conn); ?>
 <script type="text/javascript"
-        src="https://app.midtrans.com/snap/snap.js?v=<?= time() ?>" 
+        src="<?= htmlspecialchars(midtrans_snap_js_url(), ENT_QUOTES, 'UTF-8') ?>" 
         data-client-key="<?= htmlspecialchars(\Midtrans\Config::$clientKey); ?>"></script>
 <style>
 #submit-button:disabled { background-color: #9ca3af; cursor: not-allowed; }
@@ -144,6 +144,10 @@ $page_title = 'Checkout - ' . (get_setting($conn, 'store_name') ?? 'Warok Kite')
                     <div class="mb-4"><label for="address_line_1" class="block text-sm font-medium text-gray-700 mb-1">Alamat Lengkap</label><textarea id="address_line_1" name="address_line_1" rows="3" class="w-full p-2 border rounded-md" placeholder="Nama jalan, nomor rumah, RT/RW" required></textarea></div>
                     <div class="mb-4"><label for="address_line_2" class="block text-sm font-medium text-gray-700 mb-1">Catatan (Opsional)</label><input type="text" id="address_line_2" name="address_line_2" class="w-full p-2 border rounded-md" placeholder="Cth: Blok/unit no., patokan"></div>
                     <div class="flex items-center" id="is-default-container"><input type="checkbox" id="is_default" name="is_default" class="h-4 w-4 text-indigo-600 border-gray-300 rounded"><label for="is_default" class="ml-2 block text-sm text-gray-900">Jadikan alamat utama</label></div>
+                </div>
+                <div class="mt-4 pt-4 border-t border-gray-100">
+                    <label for="customer_note" class="block text-sm font-medium text-gray-700 mb-1">Catatan Pesanan (Opsional)</label>
+                    <textarea id="customer_note" name="customer_note" rows="3" class="w-full p-2 border rounded-md" placeholder="Contoh: Tolong kirim sore hari, bungkus lebih aman, dll."></textarea>
                 </div>
             </div>
 
@@ -248,14 +252,17 @@ document.addEventListener('DOMContentLoaded', function() {
         try {
             const formData = new FormData(checkoutForm);
             const response = await fetch(checkoutForm.action, { method: 'POST', body: formData });
-            
-            const contentType = response.headers.get("content-type");
-            if (!contentType || !contentType.includes("application/json")) {
-                const errorText = await response.text();
-                throw new Error("Terjadi error server. Response: " + errorText);
+            const rawText = await response.text();
+            if (!rawText || !rawText.trim()) {
+                throw new Error('Response server kosong. Coba refresh halaman dan ulangi checkout.');
             }
 
-            const result = await response.json();
+            let result;
+            try {
+                result = JSON.parse(rawText);
+            } catch (parseError) {
+                throw new Error("Format response server tidak valid: " + rawText.slice(0, 200));
+            }
 
             if (!response.ok) {
                 if (result.redirect_to_cart === true) {

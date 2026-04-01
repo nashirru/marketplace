@@ -147,22 +147,31 @@ try {
 
                 } else if ($new_status === 'cancelled') {
                     // Kembalikan stok
-                    $stmt_items = $conn->prepare("SELECT product_id, quantity FROM order_items WHERE order_id = ?");
+                    $stmt_items = $conn->prepare("SELECT product_id, variation_id, quantity FROM order_items WHERE order_id = ?");
                     $stmt_items->bind_param("i", $order_id);
                     $stmt_items->execute();
                     $order_items = $stmt_items->get_result()->fetch_all(MYSQLI_ASSOC);
                     $stmt_items->close();
                     
-                    $stmt_restock = $conn->prepare("UPDATE products SET stock = stock + ? WHERE id = ?");
+                    $stmt_restock_product = $conn->prepare("UPDATE products SET stock = stock + ? WHERE id = ?");
+                    $stmt_restock_variation = $conn->prepare("UPDATE product_variations SET stock = stock + ? WHERE id = ?");
                     foreach ($order_items as $item) {
-                        $stmt_restock->bind_param("ii", $item['quantity'], $item['product_id']);
-                        $stmt_restock->execute();
+                        $variation_id = isset($item['variation_id']) ? (int)$item['variation_id'] : 0;
+                        if ($variation_id > 0) {
+                            $stmt_restock_variation->bind_param("ii", $item['quantity'], $variation_id);
+                            $stmt_restock_variation->execute();
+                        } else {
+                            $stmt_restock_product->bind_param("ii", $item['quantity'], $item['product_id']);
+                            $stmt_restock_product->execute();
+                        }
                     }
-                    $stmt_restock->close();
+                    $stmt_restock_product->close();
+                    $stmt_restock_variation->close();
                     create_notification($conn, $user_id, "Pembayaran untuk pesanan #{$order_data['order_number']} dibatalkan atau kedaluwarsa.");
                 }
             } else {
                 // Webhook sudah update duluan, tidak perlu ngapa-ngapain
+                $new_status = $status_before_lock;
             }
             
             $conn->commit();

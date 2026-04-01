@@ -220,6 +220,13 @@ if (!empty($orders)):
                             <?= htmlspecialchars($order['subdistrict']) ?>, <?= htmlspecialchars($order['city']) ?><br>
                             <?= htmlspecialchars($order['province']) ?> - <strong><?= htmlspecialchars($order['postal_code']) ?></strong>
                         </div>
+                        <?php if (!empty($order['customer_note'] ?? '')): ?>
+                            <hr class="border-gray-100 my-2">
+                            <div class="text-xs text-amber-700 bg-amber-50 border border-amber-100 rounded p-2">
+                                <span class="font-semibold block mb-0.5">Catatan Pesanan</span>
+                                <?= nl2br(htmlspecialchars($order['customer_note'])) ?>
+                            </div>
+                        <?php endif; ?>
                     </div>
                 </div>
 

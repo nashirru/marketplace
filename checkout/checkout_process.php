@@ -7,6 +7,26 @@ ini_set('display_errors', 0);
 ini_set('log_errors', 1);
 
 header('Content-Type: application/json');
+ob_start();
+
+register_shutdown_function(function () {
+    $error = error_get_last();
+    if ($error && in_array($error['type'], [E_ERROR, E_PARSE, E_CORE_ERROR, E_COMPILE_ERROR], true)) {
+        error_log('Checkout Fatal Error: ' . ($error['message'] ?? 'Unknown') . ' in ' . ($error['file'] ?? '-') . ':' . ($error['line'] ?? '-'));
+        while (ob_get_level() > 0) {
+            ob_end_clean();
+        }
+        if (!headers_sent()) {
+            http_response_code(500);
+            header('Content-Type: application/json');
+        }
+        echo json_encode([
+            'success' => false,
+            'message' => 'Fatal checkout error: ' . ($error['message'] ?? 'Unknown error'),
+            'redirect_to_cart' => false
+        ]);
+    }
+});
 
 require_once '../config/config.php';
 require_once '../sistem/sistem.php';
@@ -232,21 +252,44 @@ try {
     $order_number = generate_order_number($conn);
     $status = 'waiting_payment';
     $order_hash = md5($order_number . time() . rand()); // Hash unik tambahan
+    $customer_note = sanitize_input($_POST['customer_note'] ?? '');
+    if (strlen($customer_note) > 500) {
+        $customer_note = substr($customer_note, 0, 500);
+    }
 
     // Tambahkan order_hash ke INSERT (jika tabel orders kamu punya kolom order_hash)
     // Jika tidak punya, hapus 'order_hash' dari query di bawah ini
-    $stmt_order = $conn->prepare("
-        INSERT INTO orders (user_id, order_number, total, status, user_address_id,
-        full_name, phone_number, province, city, subdistrict, postal_code, address_line_1, address_line_2, order_hash)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    ");
+    $has_customer_note_column = false;
+    $check_customer_note_column = $conn->query("SHOW COLUMNS FROM orders LIKE 'customer_note'");
+    if ($check_customer_note_column && $check_customer_note_column->num_rows > 0) {
+        $has_customer_note_column = true;
+    }
 
-    $stmt_order->bind_param("isdsisssssssss",
-        $user_id, $order_number, $total_harga, $status, $user_address_id_for_order,
-        $address_data['full_name'], $address_data['phone_number'], $address_data['province'],
-        $address_data['city'], $address_data['subdistrict'], $address_data['postal_code'],
-        $address_data['address_line_1'], $address_data['address_line_2'], $order_hash
-    );
+    if ($has_customer_note_column) {
+        $stmt_order = $conn->prepare("
+            INSERT INTO orders (user_id, order_number, total, status, user_address_id,
+            full_name, phone_number, province, city, subdistrict, postal_code, address_line_1, address_line_2, order_hash, customer_note)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ");
+        $stmt_order->bind_param("isdsissssssssss",
+            $user_id, $order_number, $total_harga, $status, $user_address_id_for_order,
+            $address_data['full_name'], $address_data['phone_number'], $address_data['province'],
+            $address_data['city'], $address_data['subdistrict'], $address_data['postal_code'],
+            $address_data['address_line_1'], $address_data['address_line_2'], $order_hash, $customer_note
+        );
+    } else {
+        $stmt_order = $conn->prepare("
+            INSERT INTO orders (user_id, order_number, total, status, user_address_id,
+            full_name, phone_number, province, city, subdistrict, postal_code, address_line_1, address_line_2, order_hash)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ");
+        $stmt_order->bind_param("isdsisssssssss",
+            $user_id, $order_number, $total_harga, $status, $user_address_id_for_order,
+            $address_data['full_name'], $address_data['phone_number'], $address_data['province'],
+            $address_data['city'], $address_data['subdistrict'], $address_data['postal_code'],
+            $address_data['address_line_1'], $address_data['address_line_2'], $order_hash
+        );
+    }
 
     if (!$stmt_order->execute()) {
          throw new Exception("Gagal membuat pesanan: " . $stmt_order->error);
@@ -324,6 +367,15 @@ try {
         'success' => false,
         'message' => $error_message,
         'redirect_to_cart' => ($error_code === 1)
+    ]);
+} catch (Throwable $t) {
+    $conn->rollback();
+    error_log('Checkout Throwable Error: ' . $t->getMessage() . ' in ' . $t->getFile() . ':' . $t->getLine());
+    http_response_code(500);
+    echo json_encode([
+        'success' => false,
+        'message' => 'Checkout error: ' . $t->getMessage(),
+        'redirect_to_cart' => false
     ]);
 }
 ?>
