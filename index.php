@@ -23,21 +23,28 @@ if (session_status() == PHP_SESSION_NONE) {
         'samesite' => 'Lax'       
     ];
 
+    // Deteksi apakah request melewati HTTPS proxy (ngrok, dll)
+    $is_https_proxy = (
+        (isset($_SERVER['HTTP_X_FORWARDED_PROTO']) && $_SERVER['HTTP_X_FORWARDED_PROTO'] === 'https')
+        || (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off')
+        || (isset($_SERVER['SERVER_PORT']) && (int)$_SERVER['SERVER_PORT'] === 443)
+    );
+
     // Deteksi Environment (Sama seperti Admin)
     if (strpos($host, 'localhost') !== false || strpos($host, '127.0.0.1') !== false) {
         $cookie_params['secure'] = false;
         $cookie_params['samesite'] = 'Lax';
         $cookie_params['domain'] = ''; 
-    } else if (strpos($host, 'ngrok') !== false) {
+    } else if (strpos($host, 'ngrok') !== false || strpos($host, 'ngrok-free') !== false) {
         $cookie_params['domain'] = ''; 
-        $cookie_params['secure'] = true;
-        $cookie_params['samesite'] = 'None';
+        $cookie_params['secure'] = $is_https_proxy; // true jika ngrok pakai HTTPS
+        $cookie_params['samesite'] = $is_https_proxy ? 'None' : 'Lax';
     } else {
         // Production: Force Wildcard Domain (.warokkite.com)
         if (preg_match('/(?P<domain>[a-z0-9][a-z0-9\-]{1,63}\.[a-z\.]{2,6})$/i', $host, $regs)) {
             $cookie_params['domain'] = '.' . $regs['domain'];
         }
-        $cookie_params['secure'] = isset($_SERVER['HTTPS']) || $_SERVER['SERVER_PORT'] == 443;
+        $cookie_params['secure'] = $is_https_proxy || isset($_SERVER['HTTPS']) || $_SERVER['SERVER_PORT'] == 443;
     }
 
     // Terapkan Aturan Cookie

@@ -131,7 +131,17 @@ try {
 
                 if ($is_success) {
                     // Catat riwayat pembelian
-                    $stmt_items = $conn->prepare("SELECT oi.product_id, oi.quantity, p.stock_cycle_id FROM order_items oi JOIN products p ON oi.product_id = p.id WHERE oi.order_id = ?");
+                                        $has_order_items_stock_cycle = false;
+                    $check_col = $conn->query("SHOW COLUMNS FROM order_items LIKE 'stock_cycle_id'");
+                    if ($check_col && $check_col->num_rows > 0) {
+                        $has_order_items_stock_cycle = true;
+                    }
+
+                    if ($has_order_items_stock_cycle) {
+                        $stmt_items = $conn->prepare("SELECT oi.product_id, oi.quantity, oi.stock_cycle_id FROM order_items oi WHERE oi.order_id = ?");
+                    } else {
+                        $stmt_items = $conn->prepare("SELECT oi.product_id, oi.quantity, p.stock_cycle_id FROM order_items oi JOIN products p ON oi.product_id = p.id WHERE oi.order_id = ?");
+                    }
                     $stmt_items->bind_param("i", $order_id);
                     $stmt_items->execute();
                     $order_items = $stmt_items->get_result()->fetch_all(MYSQLI_ASSOC);
@@ -196,3 +206,5 @@ try {
     ]);
 }
 ?>
+
+

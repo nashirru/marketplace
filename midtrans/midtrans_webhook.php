@@ -1,4 +1,4 @@
-<?php
+﻿<?php
 // File: midtrans/midtrans_webhook.php
 // VERSI FINAL: Siap produksi (log debug dihapus)
 
@@ -86,14 +86,25 @@ try {
         $current_status = $current_order['status'];
         $user_id = $current_order['user_id'];
 
-        // Hanya proses jika status masih 'waiting_payment'
-        if ($current_status !== 'waiting_payment') {
+        // Proses webhook jika status masih menunggu bayar ATAU sudah terlanjur cancelled (race condition).
+        // Jika cancelled lalu ternyata settlement/capture, kita pulihkan ke belum_dicetak.
+        $paid_statuses = ['belum_dicetak', 'processed', 'shipped', 'completed'];
+        if (in_array($current_status, $paid_statuses, true)) {
+            $conn->commit();
+            http_response_code(200);
+            echo "OK (Already Paid)";
+            exit;
+        }
+
+        $processable_statuses = ['waiting_payment', 'cancelled'];
+        if (!in_array($current_status, $processable_statuses, true)) {
             $conn->commit();
             http_response_code(200);
             echo "OK (Already Processed)";
             exit;
         }
 
+        $was_cancelled = ($current_status === 'cancelled');
         $new_status = null;
         $is_success = false;
         
@@ -108,8 +119,20 @@ try {
         }
 
         if ($new_status) {
+            // Jika sudah cancelled sebelumnya, notifikasi cancel/expire berikutnya jangan restock dua kali.
+            if ($new_status === 'cancelled' && $was_cancelled) {
+                $conn->commit();
+                http_response_code(200);
+                echo "OK (Already Cancelled)";
+                exit;
+            }
             // Update status order
-            $stmt = $conn->prepare("UPDATE orders SET status = ?, midtrans_transaction_id = ? WHERE id = ?");
+            // Update status order
+            if ($new_status === 'belum_dicetak') {
+                $stmt = $conn->prepare("UPDATE orders SET status = ?, midtrans_transaction_id = ?, cancel_reason = NULL WHERE id = ?");
+            } else {
+                $stmt = $conn->prepare("UPDATE orders SET status = ?, midtrans_transaction_id = ? WHERE id = ?");
+            }
             $stmt->bind_param("ssi", $new_status, $transaction_id, $order_id);
             
             if (!$stmt->execute()) {
@@ -119,13 +142,58 @@ try {
 
             // PENCATATAN RIWAYAT PEMBELIAN (JIKA BERHASIL)
             if ($is_success) {
+                // [RACE CONDITION FIX] Jika order sempat cancelled lalu tiba-tiba paid, stok biasanya sudah direstock.
+                // Kita kurangi lagi (clamp ke 0) supaya stok tidak membesar.
+                // RE-DEDUCT STOCK
+                if ($was_cancelled) {
+                    $stmt_stock_items = $conn->prepare("SELECT product_id, variation_id, quantity FROM order_items WHERE order_id = ?");
+                    $stmt_stock_items->bind_param("i", $order_id);
+                    $stmt_stock_items->execute();
+                    $stock_items = $stmt_stock_items->get_result()->fetch_all(MYSQLI_ASSOC);
+                    $stmt_stock_items->close();
+
+                    if (!empty($stock_items)) {
+                        $stmt_prod_dec = $conn->prepare("UPDATE products SET stock = GREATEST(stock - ?, 0) WHERE id = ?");
+                        $stmt_var_dec  = $conn->prepare("UPDATE product_variations SET stock = GREATEST(stock - ?, 0) WHERE id = ?");
+                        foreach ($stock_items as $it) {
+                            $qty = (int)($it['quantity'] ?? 0);
+                            $pid = (int)($it['product_id'] ?? 0);
+                            $vid = (int)($it['variation_id'] ?? 0);
+                            if ($qty <= 0 || $pid <= 0) continue;
+                            $stmt_prod_dec->bind_param("ii", $qty, $pid);
+                            $stmt_prod_dec->execute();
+                            if ($vid > 0) {
+                                $stmt_var_dec->bind_param("ii", $qty, $vid);
+                                $stmt_var_dec->execute();
+                            }
+                        }
+                        $stmt_prod_dec->close();
+                        $stmt_var_dec->close();
+                    }
+                }
+
                 
-                $stmt_items = $conn->prepare("
-                    SELECT oi.product_id, oi.quantity, p.stock_cycle_id, p.name as product_name
-                    FROM order_items oi 
-                    JOIN products p ON oi.product_id = p.id 
-                    WHERE oi.order_id = ?
-                ");
+                                $has_order_items_stock_cycle = false;
+                $check_col = $conn->query("SHOW COLUMNS FROM order_items LIKE 'stock_cycle_id'");
+                if ($check_col && $check_col->num_rows > 0) {
+                    $has_order_items_stock_cycle = true;
+                }
+
+                if ($has_order_items_stock_cycle) {
+                    $stmt_items = $conn->prepare("
+                        SELECT oi.product_id, oi.quantity, oi.stock_cycle_id, p.name as product_name
+                        FROM order_items oi 
+                        JOIN products p ON oi.product_id = p.id 
+                        WHERE oi.order_id = ?
+                    ");
+                } else {
+                    $stmt_items = $conn->prepare("
+                        SELECT oi.product_id, oi.quantity, p.stock_cycle_id, p.name as product_name
+                        FROM order_items oi 
+                        JOIN products p ON oi.product_id = p.id 
+                        WHERE oi.order_id = ?
+                    ");
+                }
                 $stmt_items->bind_param("i", $order_id);
                 $stmt_items->execute();
                 $order_items = $stmt_items->get_result()->fetch_all(MYSQLI_ASSOC);
@@ -209,3 +277,5 @@ try {
     echo "ERROR: " . $e->getMessage();
 }
 ?>
+
+

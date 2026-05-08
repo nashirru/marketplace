@@ -84,16 +84,41 @@ function page_head($page_title, $conn, $seo_desc = null, $seo_keywords = null, $
     <link rel="icon" type="image/png" href="<?= htmlspecialchars($favicon_path) ?>">
     <link rel="apple-touch-icon" href="<?= htmlspecialchars($favicon_path) ?>">
 
-    <!-- External Resources: Tailwind CSS & Fonts -->
-    <script src="https://cdn.tailwindcss.com"></script>
-    
-    <!-- Google Fonts: Inter (Clean & Modern) -->
+    <!-- ============================================================ -->
+    <!-- RESOURCE LOADING DIOPTIMASI (menghilangkan render-blocking)   -->
+    <!-- ============================================================ -->
+
+    <!-- DNS Prefetch & Preconnect: koneksi dibuka lebih awal ke CDN eksternal -->
+    <link rel="dns-prefetch" href="https://fonts.googleapis.com">
+    <link rel="dns-prefetch" href="https://fonts.gstatic.com">
+    <link rel="dns-prefetch" href="https://cdnjs.cloudflare.com">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
-    
-    <!-- Font Awesome untuk Ikon -->
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+
+    <!--
+        TAILWIND CSS — Pakai file lokal yang sudah didownload.
+        Lebih cepat & tidak ada SRI hash mismatch.
+    -->
+    <link rel="stylesheet" href="<?= BASE_URL ?>/assets/css/tailwind.min.css">
+
+    <!-- Google Fonts: Inter — display=swap agar teks langsung tampil, font load belakangan -->
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap"
+          rel="stylesheet" media="print" onload="this.media='all'">
+    <noscript>
+        <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+    </noscript>
+
+    <!--
+        Font Awesome — load tanpa integrity hash (langsung dari CDN).
+        media="print" trick agar tidak render-blocking.
+    -->
+    <link rel="stylesheet"
+          href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css"
+          media="print" onload="this.media='all'"
+          crossorigin="anonymous" referrerpolicy="no-referrer">
+    <noscript>
+        <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    </noscript>
 
     <!-- Custom CSS untuk Override dan Utilitas Spesifik -->
     <style>
@@ -120,6 +145,40 @@ function page_head($page_title, $conn, $seo_desc = null, $seo_keywords = null, $
             -webkit-line-clamp: 2;
         }
 
+        /* ================================================================
+           Aspect Ratio Utilities (tidak ada di Tailwind v2, ditambahkan manual)
+           ================================================================ */
+        .aspect-square {
+            aspect-ratio: 1 / 1;
+        }
+        .aspect-video {
+            aspect-ratio: 16 / 9;
+        }
+
+        /* Gambar di dalam container aspect-ratio SELALU 1:1, tidak gepeng/molor */
+        .aspect-square img,
+        .aspect-video img {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+            object-position: center;
+            display: block;
+        }
+
+        /* Fallback untuk browser lama yang belum support aspect-ratio */
+        @supports not (aspect-ratio: 1) {
+            .aspect-square {
+                position: relative;
+                padding-bottom: 100%; /* 1:1 */
+                overflow: hidden;
+            }
+            .aspect-square > * {
+                position: absolute;
+                top: 0; left: 0;
+                width: 100%; height: 100%;
+            }
+        } /* end @supports */
+
         /* Form Elements Reset */
         input[type="search"]::-webkit-search-decoration,
         input[type="search"]::-webkit-search-cancel-button,
@@ -144,6 +203,17 @@ function page_head($page_title, $conn, $seo_desc = null, $seo_keywords = null, $
             z-index: 10;
             pointer-events: auto;
         }
+
+        /* Responsive aspect ratio untuk banner */
+        #banner-carousel {
+            aspect-ratio: 16 / 9;
+            min-height: 180px;
+        }
+        @media (min-width: 768px) {
+            #banner-carousel {
+                aspect-ratio: 21 / 8;
+            }
+        }
         
         /* Custom Scrollbar */
         ::-webkit-scrollbar {
@@ -167,19 +237,17 @@ function page_head($page_title, $conn, $seo_desc = null, $seo_keywords = null, $
         @keyframes pulse-green {
             0% { box-shadow: 0 0 0 0 rgba(37, 211, 102, 0.7); }
             70% { box-shadow: 0 0 0 10px rgba(37, 211, 102, 0); }
-            100% { box-shadow: 0 0 0 0 rgba(37, 211, 102, 0); }
         }
     </style>
+    <!-- Google Analytics — async = tidak memblokir render halaman -->
+    <script async src="https://www.googletagmanager.com/gtag/js?id=G-H26R0QZVBE"></script>
+    <script>
+      window.dataLayer = window.dataLayer || [];
+      function gtag(){dataLayer.push(arguments);}
+      gtag('js', new Date());
+      gtag('config', 'G-H26R0QZVBE');
+    </script>
 </head>
-<!-- Google tag (gtag.js) -->
-<script async src="https://www.googletagmanager.com/gtag/js?id=G-H26R0QZVBE"></script>
-<script>
-  window.dataLayer = window.dataLayer || [];
-  function gtag(){dataLayer.push(arguments);}
-  gtag('js', new Date());
-
-  gtag('config', 'G-H26R0QZVBE');
-</script>
 <?php
 }
 
@@ -428,7 +496,7 @@ function banner_slide($conn) {
 ?>
 <div class="relative w-full mb-8 sm:mb-12 group">
     <!-- Container Aspect Ratio -->
-    <div id="banner-carousel" class="relative w-full overflow-hidden rounded-2xl bg-gray-200 aspect-[16/9] md:aspect-[21/8] shadow-md">
+    <div id="banner-carousel" class="relative w-full overflow-hidden rounded-2xl bg-gray-200 shadow-md" style="aspect-ratio: 16/9; min-height: 180px;">
         <?php foreach ($banners as $idx => $banner): ?>
             <div class="banner-slide <?= $idx === 0 ? 'active' : '' ?>" data-index="<?= $idx ?>">
                 <a href="<?= htmlspecialchars($banner['link_url'] ?: '#') ?>" class="block w-full h-full">

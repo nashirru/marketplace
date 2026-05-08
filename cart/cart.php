@@ -6,6 +6,7 @@
 require_once '../config/config.php';
 require_once '../sistem/sistem.php';
 require_once '../partial/partial.php';
+require_once '../midtrans/config_midtrans.php';
 
 $user_id = $_SESSION['user_id'] ?? 0;
 
@@ -332,11 +333,36 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !isset($_POST['ajax'])) {
 $cart_items = get_cart_items_with_variation($conn, $user_id);
 $total_price = array_reduce($cart_items, fn($sum, $item) => $sum + ($item['price'] * $item['quantity']), 0);
 $page_title = "Keranjang Belanja";
+
+// Cek apakah ada order tertunda (waiting_payment) milik user ini
+$pending_order = null;
+if ($user_id > 0 && empty($cart_items)) {
+    $stmt_pending = $conn->prepare("
+        SELECT id, order_number, total, created_at 
+        FROM orders 
+        WHERE user_id = ? AND status = 'waiting_payment'
+        ORDER BY created_at DESC 
+        LIMIT 1
+    ");
+    $stmt_pending->bind_param("i", $user_id);
+    $stmt_pending->execute();
+    $res_pending = $stmt_pending->get_result();
+    if ($res_pending->num_rows > 0) {
+        $pending_order = $res_pending->fetch_assoc();
+    }
+    $stmt_pending->close();
+}
 ?>
 
 <!DOCTYPE html>
 <html lang="id">
 <?php page_head($page_title . ' - ' . get_setting($conn, 'store_name'), $conn); ?>
+<?php if ($pending_order): ?>
+<!-- Snap.js hanya dimuat jika ada order tertunda -->
+<script type="text/javascript"
+        src="<?= htmlspecialchars(midtrans_snap_js_url(), ENT_QUOTES, 'UTF-8') ?>"
+        data-client-key="<?= htmlspecialchars(\Midtrans\Config::$clientKey, ENT_QUOTES, 'UTF-8') ?>"></script>
+<?php endif; ?>
 <body class="bg-gray-100">
 
     <?php navbar($conn) ?>
@@ -347,13 +373,116 @@ $page_title = "Keranjang Belanja";
         <h1 class="text-3xl font-bold text-gray-800 mb-6">Keranjang Belanja Anda</h1>
         
         <?php if (empty($cart_items)): ?>
-            <div class="bg-white rounded-lg shadow-md p-8 text-center">
-                <i class="fas fa-shopping-cart text-5xl text-gray-300 mb-4"></i>
-                <h2 class="text-2xl font-semibold text-gray-700">Keranjang Anda Kosong</h2>
-                <p class="text-gray-500 mt-2">Sepertinya Anda belum menambahkan produk apapun.</p>
-                <a href="<?= BASE_URL ?>/" class="mt-6 inline-block bg-indigo-600 text-white font-bold py-3 px-6 rounded-lg hover:bg-indigo-700 transition-colors">Mulai Belanja</a>
+            <?php if ($pending_order): ?>
+            <!-- ===== STATE: ADA ORDER TERTUNDA (User tutup Snap) ===== -->
+            <style>
+                @keyframes pulse-ring {
+                    0% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(234, 179, 8, 0.5); }
+                    70% { transform: scale(1); box-shadow: 0 0 0 12px rgba(234, 179, 8, 0); }
+                    100% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(234, 179, 8, 0); }
+                }
+                .pulse-badge { animation: pulse-ring 2s infinite; }
+            </style>
+            <div class="max-w-2xl mx-auto">
+
+                <!-- Card Peringatan Order Tertunda -->
+                <div class="bg-white rounded-2xl shadow-lg border border-yellow-200 overflow-hidden mb-6">
+                    <!-- Header Strip -->
+                    <div class="bg-gradient-to-r from-yellow-400 to-orange-400 px-6 py-4 flex items-center gap-3">
+                        <div class="w-10 h-10 bg-white/30 rounded-full flex items-center justify-center flex-shrink-0">
+                            <i class="fas fa-clock text-white text-lg"></i>
+                        </div>
+                        <div>
+                            <h2 class="text-white font-bold text-lg leading-tight">Pembayaran Belum Selesai</h2>
+                            <p class="text-yellow-100 text-sm">Anda menutup jendela pembayaran sebelum menyelesaikan transaksi.</p>
+                        </div>
+                    </div>
+
+                    <!-- Isi Card -->
+                    <div class="px-6 py-5">
+                        <!-- Info Order -->
+                        <div class="bg-gray-50 rounded-xl p-4 mb-5 border border-gray-100">
+                            <div class="grid grid-cols-2 gap-4">
+                                <div>
+                                    <p class="text-xs text-gray-400 uppercase font-bold tracking-wider mb-1">Nomor Pesanan</p>
+                                    <p class="text-sm font-bold text-gray-800 font-mono"><?= htmlspecialchars($pending_order['order_number']) ?></p>
+                                </div>
+                                <div>
+                                    <p class="text-xs text-gray-400 uppercase font-bold tracking-wider mb-1">Total Tagihan</p>
+                                    <p class="text-sm font-bold text-red-600"><?= format_rupiah($pending_order['total']) ?></p>
+                                </div>
+                                <div class="col-span-2">
+                                    <p class="text-xs text-gray-400 uppercase font-bold tracking-wider mb-1">Dibuat Pada</p>
+                                    <p class="text-sm text-gray-600"><?= date('d M Y, H:i', strtotime($pending_order['created_at'])) ?> WIB</p>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Info Penting -->
+                        <div class="flex items-start gap-3 bg-blue-50 border border-blue-100 rounded-xl p-4 mb-5">
+                            <i class="fas fa-info-circle text-blue-500 mt-0.5 flex-shrink-0"></i>
+                            <p class="text-sm text-blue-700 leading-relaxed">
+                                Pesanan Anda <strong>sudah tercatat</strong> di sistem kami dan stok telah direservasi. 
+                                Selesaikan pembayaran sebelum batas waktu agar pesanan tidak dibatalkan otomatis.
+                            </p>
+                        </div>
+
+                        <!-- Tombol Aksi -->
+                        <div class="flex flex-col sm:flex-row gap-3">
+                            <button id="btn-lanjutkan-bayar"
+                                    onclick="lanjutkanPembayaran(<?= (int)$pending_order['id'] ?>)"
+                                    class="pulse-badge flex-1 flex items-center justify-center gap-2 px-6 py-3.5 bg-gradient-to-r from-yellow-500 to-orange-500 text-white font-bold rounded-xl hover:from-yellow-600 hover:to-orange-600 transition-all shadow-md text-center disabled:opacity-60 disabled:cursor-not-allowed">
+                                <i class="fas fa-credit-card"></i>
+                                <span id="btn-lanjutkan-text">Lanjutkan Pembayaran</span>
+                            </button>
+                            <a href="<?= BASE_URL ?>/profile/profile.php?tab=orders" 
+                               class="flex items-center justify-center gap-2 px-6 py-3.5 bg-white border border-gray-300 text-gray-700 font-semibold rounded-xl hover:bg-gray-50 hover:border-gray-400 transition-all text-center">
+                                <i class="fas fa-list-ul text-gray-400"></i>
+                                Lihat Pesanan
+                            </a>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Card Belanja Lagi -->
+                <div class="bg-white rounded-2xl shadow-sm border border-gray-100 p-6 text-center">
+                    <div class="w-14 h-14 bg-gray-100 rounded-full flex items-center justify-center mx-auto mb-3">
+                        <i class="fas fa-shopping-bag text-2xl text-gray-400"></i>
+                    </div>
+                    <h3 class="text-base font-semibold text-gray-700 mb-1">Ingin belanja lagi?</h3>
+                    <p class="text-sm text-gray-400 mb-4">Kunjungi toko kami dan tambahkan produk ke keranjang.</p>
+                    <a href="<?= BASE_URL ?>/" 
+                       class="inline-flex items-center gap-2 px-5 py-2.5 bg-red-600 text-white text-sm font-bold rounded-full hover:bg-red-700 transition-all shadow-sm">
+                        <i class="fas fa-store"></i>
+                        Jelajahi Produk
+                    </a>
+                </div>
             </div>
-        <?php else: ?>
+
+            <?php else: ?>
+            <!-- ===== STATE: KERANJANG BENAR-BENAR KOSONG ===== -->
+            <div class="max-w-md mx-auto bg-white rounded-2xl shadow-sm border border-gray-100 p-10 text-center">
+                <!-- Ilustrasi -->
+                <div class="relative inline-flex items-center justify-center w-24 h-24 bg-red-50 rounded-full mb-6">
+                    <i class="fas fa-shopping-cart text-4xl text-red-200"></i>
+                    <span class="absolute -top-1 -right-1 w-7 h-7 bg-red-600 text-white text-xs font-bold rounded-full flex items-center justify-center">0</span>
+                </div>
+                <h2 class="text-xl font-bold text-gray-800 mb-2">Keranjang Anda Kosong</h2>
+                <p class="text-gray-400 text-sm mb-7 leading-relaxed">
+                    Sepertinya Anda belum menambahkan produk apapun.<br>Yuk mulai belanja!
+                </p>
+                <a href="<?= BASE_URL ?>/" 
+                   class="inline-flex items-center gap-2 px-7 py-3 bg-red-600 text-white font-bold rounded-full hover:bg-red-700 transition-all shadow-sm hover:shadow-md hover:-translate-y-0.5 transform">
+                    <i class="fas fa-store"></i>
+                    Mulai Belanja
+                </a>
+                <p class="text-xs text-gray-300 mt-6">
+                    <i class="fas fa-lock mr-1"></i> Transaksi aman &amp; terpercaya
+                </p>
+            </div>
+            <?php endif; ?>
+
+        <?php else: /* cart tidak kosong — tampilkan isi keranjang */ ?>
             <div class="flex flex-col lg:flex-row gap-8">
                 <div class="lg:w-2/3">
                     <div class="bg-white rounded-lg shadow-md">
@@ -463,6 +592,83 @@ $page_title = "Keranjang Belanja";
     </main>
 
     <?php footer($conn) ?>
+
+    <script>
+        // ============================================================
+        // JS: Lanjutkan Pembayaran (untuk order tertunda)
+        // ============================================================
+        const paymentStatusUrlBase = '<?= BASE_URL ?>/checkout/payment_status.php';
+        const getSnapTokenUrl      = '<?= BASE_URL ?>/checkout/get_snap_token.php';
+
+        async function lanjutkanPembayaran(orderId) {
+            const btn     = document.getElementById('btn-lanjutkan-bayar');
+            const btnText = document.getElementById('btn-lanjutkan-text');
+
+            if (!btn) return;
+
+            // Tampilkan loading state pada tombol
+            btn.disabled = true;
+            btnText.innerHTML = '<i class="fas fa-spinner fa-spin mr-2"></i> Memuat...';
+
+            try {
+                const formData = new FormData();
+                formData.append('order_id', orderId);
+
+                const response = await fetch(getSnapTokenUrl, {
+                    method: 'POST',
+                    body: formData
+                });
+                const result = await response.json();
+
+                if (!result.success) {
+                    if (result.already_paid) {
+                        // Order sudah dibayar, redirect ke profil
+                        alert('Pesanan ini sudah dibayar atau tidak aktif. Mengarahkan ke halaman pesanan...');
+                        window.location.href = '<?= BASE_URL ?>/profile/profile.php?tab=orders';
+                        return;
+                    }
+                    throw new Error(result.message || 'Gagal mendapatkan token pembayaran.');
+                }
+
+                const snapToken = result.snap_token;
+                const dbOrderId = result.order_id;
+                let   paymentHandled = false;
+
+                // Reset tombol sebelum Snap terbuka
+                btn.disabled = false;
+                btnText.textContent = 'Lanjutkan Pembayaran';
+
+                // Buka Snap Popup
+                window.snap.pay(snapToken, {
+                    onSuccess: function(res) {
+                        paymentHandled = true;
+                        window.location.href = `${paymentStatusUrlBase}?status=success&order_id=${dbOrderId}&message=${encodeURIComponent('Pembayaran berhasil! Memverifikasi...')}`;
+                    },
+                    onPending: function(res) {
+                        paymentHandled = true;
+                        window.location.href = `${paymentStatusUrlBase}?status=pending&order_id=${dbOrderId}&message=${encodeURIComponent('Pembayaran Anda tertunda. Memverifikasi...')}`;
+                    },
+                    onError: function(res) {
+                        paymentHandled = true;
+                        window.location.href = `${paymentStatusUrlBase}?status=error&order_id=${dbOrderId}&message=${encodeURIComponent('Pembayaran gagal, silakan coba lagi.')}`;
+                    },
+                    onClose: function() {
+                        // User tutup Snap lagi — biarkan di halaman cart
+                        if (!paymentHandled) {
+                            btn.disabled = false;
+                            btnText.textContent = 'Lanjutkan Pembayaran';
+                        }
+                    }
+                });
+
+            } catch (error) {
+                console.error('[LanjutkanBayar]', error);
+                alert('Gagal memuat pembayaran: ' + error.message);
+                btn.disabled = false;
+                btnText.textContent = 'Lanjutkan Pembayaran';
+            }
+        }
+    </script>
 
     <script>
         function debounce(func, delay = 400) {

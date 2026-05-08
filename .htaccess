@@ -1,0 +1,72 @@
+# ============================================================
+# Warok Kite — Apache .htaccess
+# Tujuan: Browser caching, GZIP compression, security headers
+# ============================================================
+
+# --- 1. GZIP Compression (kurangi ukuran transfer) ---
+<IfModule mod_deflate.c>
+    AddOutputFilterByType DEFLATE text/html text/plain text/xml
+    AddOutputFilterByType DEFLATE text/css application/javascript
+    AddOutputFilterByType DEFLATE application/json application/xml
+    AddOutputFilterByType DEFLATE image/svg+xml font/woff2 font/woff
+</IfModule>
+
+# --- 2. Browser Caching (static assets di-cache 1 tahun) ---
+<IfModule mod_expires.c>
+    ExpiresActive On
+
+    # CSS & JavaScript
+    ExpiresByType text/css                  "access plus 1 year"
+    ExpiresByType application/javascript    "access plus 1 year"
+
+    # Gambar
+    ExpiresByType image/jpeg                "access plus 1 year"
+    ExpiresByType image/png                 "access plus 1 year"
+    ExpiresByType image/gif                 "access plus 1 year"
+    ExpiresByType image/webp                "access plus 1 year"
+    ExpiresByType image/svg+xml             "access plus 1 year"
+    ExpiresByType image/x-icon              "access plus 1 year"
+
+    # Font
+    ExpiresByType font/woff                 "access plus 1 year"
+    ExpiresByType font/woff2                "access plus 1 year"
+    ExpiresByType application/font-woff     "access plus 1 year"
+
+    # HTML & PHP (jangan di-cache, selalu fresh)
+    ExpiresByType text/html                 "access plus 0 seconds"
+</IfModule>
+
+# Cache-Control header (fallback jika mod_expires tidak ada)
+<IfModule mod_headers.c>
+    # Cache static assets 1 tahun
+    <FilesMatch "\.(css|js|jpg|jpeg|png|gif|webp|svg|ico|woff|woff2)$">
+        Header set Cache-Control "public, max-age=31536000, immutable"
+    </FilesMatch>
+    # Jangan cache file PHP
+    <FilesMatch "\.php$">
+        Header set Cache-Control "no-cache, no-store, must-revalidate"
+        Header set Pragma "no-cache"
+    </FilesMatch>
+
+    # --- Security Headers Dasar ---
+    Header always set X-Content-Type-Options "nosniff"
+    Header always set X-Frame-Options "SAMEORIGIN"
+    Header always set Referrer-Policy "strict-origin-when-cross-origin"
+
+    # --- Bypass ngrok browser warning interstitial ---
+    Header always set ngrok-skip-browser-warning "true"
+</IfModule>
+
+# --- 3. Sembunyikan versi PHP dari response header ---
+<IfModule mod_headers.c>
+    Header unset X-Powered-By
+</IfModule>
+
+# --- 4. Blokir akses langsung ke file sensitif ---
+<FilesMatch "\.(env|sql|log|gitignore|lock|json)$">
+    Order allow,deny
+    Deny from all
+</FilesMatch>
+
+# --- 5. Arahkan semua request ke folder yang benar (opsional) ---
+Options -Indexes

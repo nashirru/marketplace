@@ -1,6 +1,20 @@
-<?php
+﻿<?php
 // File: checkout/payment_status.php
 // FULL SCRIPT DENGAN ANIMASI CSS
+
+// ============================================================
+// [COMPATIBILITY PATCH]
+// Jika Midtrans salah mengarahkankan "Payment Notification URL" ke file ini,
+// Midtrans akan POST JSON ke endpoint ini. Halaman ini versi UI (GET) dan
+// bisa melakukan redirect, sehingga Midtrans akan gagal (301/302/303).
+//
+// Solusi: jika request adalah POST, jalankan webhook handler dan balas 200.
+// ============================================================
+if (isset($_SERVER['REQUEST_METHOD']) && strtoupper($_SERVER['REQUEST_METHOD']) === 'POST') {
+    require_once __DIR__ . '/../midtrans/midtrans_webhook.php';
+    exit;
+}
+
 
 // 1. Mulai sesi dan muat file yang diperlukan
 require_once '../config/config.php';
@@ -264,3 +278,4 @@ document.addEventListener('DOMContentLoaded', function() {
 
 </body>
 </html>
+

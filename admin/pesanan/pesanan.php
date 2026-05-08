@@ -1,4 +1,4 @@
-<?php
+﻿<?php
 // File: admin/pesanan/pesanan.php
 
 if (!defined('IS_ADMIN_PAGE')) {
@@ -165,6 +165,35 @@ function get_status_class($status) {
     </div>
 </div>
 
+<div id="reconcile-modal" class="fixed inset-0 bg-gray-700 bg-opacity-60 z-50 hidden">
+    <div class="min-h-full flex items-center justify-center p-4">
+        <div class="bg-white rounded-lg shadow-xl w-full max-w-3xl overflow-hidden">
+            <div class="flex items-center justify-between px-5 py-4 border-b">
+                <div>
+                    <h3 class="text-base font-semibold text-gray-900">Rekonsiliasi Midtrans</h3>
+                    <p class="text-xs text-gray-500 mt-0.5">Menampilkan order yang statusnya <b>cancelled</b> tapi di Midtrans ternyata sudah <b>settlement/capture</b>.</p>
+                </div>
+                <button type="button" id="reconcile-close-btn" class="text-gray-400 hover:text-gray-600 text-2xl leading-none">&times;</button>
+            </div>
+            <div class="p-5">
+                <div class="flex flex-wrap items-center gap-2">
+                    <button type="button" id="reconcile-scan-btn" class="px-3 py-2 text-xs font-semibold bg-indigo-600 text-white rounded-lg hover:bg-indigo-700">Scan Cancel Terbaru</button>
+                    <div class="flex-1 min-w-[260px] flex gap-2">
+                        <input type="text" id="reconcile-query" class="w-full px-3 py-2 text-sm border rounded-lg" placeholder="Cari: order_number / attempt_order_number / order_id" />
+                        <button type="button" id="reconcile-manual-btn" class="px-3 py-2 text-xs font-semibold bg-gray-900 text-white rounded-lg hover:bg-black">Cek</button>
+                    </div>
+                </div>
+
+                <div id="reconcile-results" class="mt-4 border rounded-lg overflow-auto max-h-[60vh]">
+                    <div class="p-4 text-sm text-gray-600">Klik <b>Scan Cancel Terbaru</b> atau lakukan pencarian manual.</div>
+                </div>
+
+                <p class="mt-3 text-xs text-gray-500">Catatan: jika Midtrans webhook kamu sudah benar, kasus seperti ini harusnya makin jarang. Tetap cek stok manual kalau terjadi oversell.</p>
+            </div>
+        </div>
+    </div>
+</div>
+
 <div class="bg-white p-6 rounded-lg shadow-md relative"> 
 
     <!-- Header Kontrol -->
@@ -189,6 +218,7 @@ function get_status_class($status) {
             </div>
         </div>
         <div class="flex items-center gap-4">
+            <button type="button" id="reconcile-btn" class="px-3 py-2 text-xs font-semibold bg-gray-900 text-white rounded-lg hover:bg-black transition">Rekonsiliasi Midtrans</button>
              <div id="dynamic-print-button-container">
                 <?php // Konten diisi oleh AJAX ?>
              </div>
@@ -414,6 +444,160 @@ document.addEventListener('DOMContentLoaded', function() {
         }, 200); // Durasi harus cocok dengan transisi CSS (approx)
     };
     
+
+    // ================================================================
+    // Rekonsiliasi Midtrans (Modal)
+    // ================================================================
+    const reconcileBtn = document.getElementById('reconcile-btn');
+    const reconcileModal = document.getElementById('reconcile-modal');
+    const reconcileCloseBtn = document.getElementById('reconcile-close-btn');
+    const reconcileScanBtn = document.getElementById('reconcile-scan-btn');
+    const reconcileManualBtn = document.getElementById('reconcile-manual-btn');
+    const reconcileQueryInput = document.getElementById('reconcile-query');
+    const reconcileResults = document.getElementById('reconcile-results');
+
+    const openReconcileModal = () => {
+        if (!reconcileModal) return;
+        stopAutoRefresh();
+        reconcileModal.classList.remove('hidden');
+        if (reconcileResults) {
+            reconcileResults.innerHTML = `<div class="p-4 text-sm text-gray-600">Klik <b>Scan Cancel Terbaru</b> atau lakukan pencarian manual.</div>`;
+        }
+        if (reconcileQueryInput) {
+            reconcileQueryInput.value = '';
+            setTimeout(() => reconcileQueryInput.focus(), 50);
+        }
+    };
+
+    const closeReconcileModal = () => {
+        if (!reconcileModal) return;
+        reconcileModal.classList.add('hidden');
+        startAutoRefresh();
+    };
+
+    const renderReconcileItems = (items, titleText) => {
+        if (!reconcileResults) return;
+        const safeTitle = titleText ? `<div class="px-4 py-3 text-xs font-semibold text-gray-700 bg-gray-50 border-b">${titleText}</div>` : '';
+        if (!items || items.length === 0) {
+            reconcileResults.innerHTML = safeTitle + `<div class="p-4 text-sm text-gray-600">Tidak ada data.</div>`;
+            return;
+        }
+
+        const rows = items.map((it) => {
+            const orderNumber = it.order_number || it.order_id;
+            const midStatus = it.midtrans_status || 'unknown';
+            const midOrderId = it.midtrans_order_id || '-';
+            const createdAt = it.created_at || '-';
+            return `
+                <div class="p-4 border-b last:border-b-0 flex flex-wrap items-center justify-between gap-3">
+                    <div class="min-w-[220px]">
+                        <div class="text-sm font-semibold text-gray-900">#${orderNumber}</div>
+                        <div class="text-xs text-gray-500 mt-0.5">Order ID: ${it.order_id} | ${createdAt}</div>
+                        <div class="text-xs text-gray-600 mt-1">Midtrans: <span class="font-semibold">${midStatus}</span> | ${midOrderId}</div>
+                    </div>
+                    <div class="flex items-center gap-2">
+                        <button type="button" class="px-3 py-2 text-xs font-semibold bg-green-600 text-white rounded-lg hover:bg-green-700" data-reconcile-action="restore" data-order-id="${it.order_id}">Pulihkan</button>
+                    </div>
+                </div>`;
+        }).join('');
+
+        reconcileResults.innerHTML = safeTitle + rows;
+    };
+
+    const reconcilePost = async (action, extra = {}) => {
+        const formData = new FormData();
+        formData.append('action', action);
+        formData.append('is_ajax', 1);
+        Object.keys(extra).forEach((k) => formData.append(k, extra[k]));
+        return await fetchWithSuperDebugging(adminActionUrl, formData);
+    };
+
+    const reconcileScan = async () => {
+        if (!reconcileResults) return;
+        reconcileResults.innerHTML = `<div class="p-4 text-sm text-gray-600">Memindai order cancelled terbaru... (ini bisa agak lama)</div>`;
+        try {
+            const result = await reconcilePost('reconcile_find_paid_cancelled', { limit: 20 });
+            if (!result.success) {
+                reconcileResults.innerHTML = `<div class="p-4 text-sm text-red-600">${result.message || 'Gagal.'}</div>`;
+                return;
+            }
+            renderReconcileItems(result.items || [], `Hasil scan (checked: ${result.checked || 0})`);
+        } catch (e) {
+            const msg = (e && (e.message || e.toString())) ? (e.message || e.toString()) : 'Error';
+            reconcileResults.innerHTML = `<div class="p-4 text-sm text-red-600">${msg}</div>`;
+        }
+    };
+
+    const reconcileManualCheck = async () => {
+        const q = (reconcileQueryInput ? reconcileQueryInput.value : '').trim();
+        if (!q) {
+            showCustomAlert('Info', 'Masukkan order_number / attempt_order_number / order_id.', 'warning');
+            return;
+        }
+        reconcileResults.innerHTML = `<div class="p-4 text-sm text-gray-600">Mengecek Midtrans...</div>`;
+        try {
+            const result = await reconcilePost('reconcile_manual_check', { query: q });
+            if (!result.success) {
+                reconcileResults.innerHTML = `<div class="p-4 text-sm text-red-600">${result.message || 'Gagal.'}</div>`;
+                return;
+            }
+            const item = result.item || null;
+            if (!item) {
+                reconcileResults.innerHTML = `<div class="p-4 text-sm text-gray-600">Tidak ada data.</div>`;
+                return;
+            }
+            // Render single item; tombol restore hanya muncul kalau eligible
+            const rows = [`<div class="p-4 border-b last:border-b-0 flex flex-wrap items-center justify-between gap-3">
+                <div class="min-w-[220px]">
+                    <div class="text-sm font-semibold text-gray-900">#${item.order_number}</div>
+                    <div class="text-xs text-gray-500 mt-0.5">Order ID: ${item.order_id} | Status: ${item.status || '-'} | ${item.created_at || '-'}</div>
+                    <div class="text-xs text-gray-600 mt-1">Midtrans: <span class="font-semibold">${item.midtrans_status || 'unknown'}</span> | ${item.midtrans_order_id || '-'}</div>
+                </div>
+                <div class="flex items-center gap-2">
+                    ${item.eligible_restore ? `<button type="button" class="px-3 py-2 text-xs font-semibold bg-green-600 text-white rounded-lg hover:bg-green-700" data-reconcile-action="restore" data-order-id="${item.order_id}">Pulihkan</button>` : `<span class="text-xs text-gray-500">Tidak eligible</span>`}
+                </div>
+            </div>`];
+            reconcileResults.innerHTML = `<div class="px-4 py-3 text-xs font-semibold text-gray-700 bg-gray-50 border-b">Hasil pencarian</div>` + rows.join('');
+        } catch (e) {
+            const msg = (e && (e.message || e.toString())) ? (e.message || e.toString()) : 'Error';
+            reconcileResults.innerHTML = `<div class="p-4 text-sm text-red-600">${msg}</div>`;
+        }
+    };
+
+    if (reconcileBtn) reconcileBtn.addEventListener('click', openReconcileModal);
+    if (reconcileCloseBtn) reconcileCloseBtn.addEventListener('click', closeReconcileModal);
+    if (reconcileModal) reconcileModal.addEventListener('click', (e) => { if (e.target === reconcileModal) closeReconcileModal(); });
+    if (reconcileScanBtn) reconcileScanBtn.addEventListener('click', reconcileScan);
+    if (reconcileManualBtn) reconcileManualBtn.addEventListener('click', reconcileManualCheck);
+    if (reconcileQueryInput) reconcileQueryInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); reconcileManualCheck(); } });
+
+    if (reconcileResults) {
+        reconcileResults.addEventListener('click', async (e) => {
+            const btn = e.target.closest('[data-reconcile-action="restore"]');
+            if (!btn) return;
+            const orderId = btn.getAttribute('data-order-id');
+            if (!orderId) return;
+
+            btn.disabled = true;
+            btn.textContent = 'Memproses...';
+            try {
+                const result = await reconcilePost('reconcile_restore_paid_order', { order_id: orderId });
+                showCustomAlert(result.success ? 'Sukses' : 'Gagal', result.message || 'No message', result.success ? 'success' : 'error');
+                if (result.success) {
+                    await fetchOrderData();
+                    // refresh modal list
+                    await reconcileScan();
+                }
+            } catch (err) {
+                const msg = err?.responseBody || err?.message || 'Error tidak diketahui.';
+                showCustomAlert('Error', msg, 'error');
+            } finally {
+                btn.disabled = false;
+                btn.textContent = 'Pulihkan';
+            }
+        });
+    }
+
     const debounce = (func, delay) => {
         clearTimeout(debounceTimer);
         debounceTimer = setTimeout(func, delay);
@@ -791,6 +975,56 @@ document.addEventListener('DOMContentLoaded', function() {
                 checkbox.checked = isChecked;
             });
         }
+    });
+
+    // Cetak Resi Dipilih (khusus tab 'processed')
+    printButtonContainer.addEventListener('click', (e) => {
+        const btn = e.target.closest('#print-selected-resi-btn');
+        if (!btn) return;
+
+        const checkedBoxes = tableBody.querySelectorAll('input.order-checkbox:checked');
+        if (checkedBoxes.length === 0) {
+            showCustomAlert('Perhatian', 'Silakan pilih setidaknya satu pesanan untuk dicetak.', 'warning');
+            return;
+        }
+
+        showModal(
+            'Konfirmasi Cetak Resi',
+            `Cetak ulang resi untuk ${checkedBoxes.length} pesanan terpilih?`,
+            'Ya, Cetak',
+            () => {
+                hideModal();
+
+                const form = document.createElement('form');
+                form.method = 'POST';
+                form.action = `${baseUrl}/admin/pesanan/cetak_resi_process.php`;
+                form.target = '_blank';
+
+                const inputAction = document.createElement('input');
+                inputAction.type = 'hidden';
+                inputAction.name = 'action';
+                inputAction.value = 'print_selected';
+                form.appendChild(inputAction);
+
+                const inputFilter = document.createElement('input');
+                inputFilter.type = 'hidden';
+                inputFilter.name = 'filter_status';
+                inputFilter.value = 'processed';
+                form.appendChild(inputFilter);
+
+                checkedBoxes.forEach((cb) => {
+                    const inp = document.createElement('input');
+                    inp.type = 'hidden';
+                    inp.name = 'order_ids[]';
+                    inp.value = cb.value;
+                    form.appendChild(inp);
+                });
+
+                document.body.appendChild(form);
+                form.submit();
+                form.remove();
+            }
+        );
     });
 
 

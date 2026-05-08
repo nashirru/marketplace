@@ -98,14 +98,14 @@ if (!empty($orders)):
                     <i class="fas fa-eye"></i>
                 </button>
                 <?php if($order['status'] == 'belum_dicetak'): ?>
-                    <a href="<?= BASE_URL ?>/admin/pesanan/cetak_resi.php?action=print_single_and_process&order_id=<?= $order['id'] ?>"
+                    <a href="<?= BASE_URL ?>/admin/pesanan/cetak_resi_process.php?action=print_single_and_process&order_id=<?= $order['id'] ?>"
                        target="_blank" title="Cetak Resi & Proses"
                        onclick="return confirm('Anda yakin ingin mencetak resi ini?\nStatus pesanan akan diubah menjadi \'Diproses\'.');"
                        class="text-white bg-gray-600 hover:bg-gray-700 p-2 rounded-lg shadow-sm transition-all focus:outline-none">
                        <i class="fas fa-print"></i>
                     </a>
                 <?php elseif($order['status'] == 'processed'): ?>
-                    <a href="<?= BASE_URL ?>/admin/pesanan/cetak_resi.php?order_id=<?= $order['id'] ?>" target="_blank" title="Cetak Ulang Resi" class="text-blue-600 bg-blue-50 hover:bg-blue-100 p-2 rounded-lg transition-all focus:outline-none">
+                    <a href="<?= BASE_URL ?>/admin/pesanan/cetak_resi_process.php?order_id=<?= $order['id'] ?>" target="_blank" title="Cetak Ulang Resi" class="text-blue-600 bg-blue-50 hover:bg-blue-100 p-2 rounded-lg transition-all focus:outline-none">
                         <i class="fas fa-print"></i>
                     </a>
                 <?php endif; ?>

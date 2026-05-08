@@ -559,8 +559,8 @@ $page_title = "Profil Saya";
 
                         <!-- Card Body (Items) -->
                         <div class="p-6 space-y-4">
-                            <?php foreach (array_slice($items, 0, 2) as $item): ?>
-                                <div class="flex gap-4 group-hover:bg-gray-50/50 p-2 rounded-lg transition-colors -mx-2">
+                            <?php foreach ($items as $index => $item): ?>
+                                <div class="flex gap-4 group-hover:bg-gray-50/50 p-2 rounded-lg transition-colors -mx-2 <?= $index >= 2 ? 'hidden extra-item-' . $order['id'] : '' ?>">
                                     <div class="w-16 h-16 flex-shrink-0 bg-white rounded-lg overflow-hidden border border-gray-200 p-1">
                                         <img src="<?= BASE_URL ?>/assets/images/produk/<?= htmlspecialchars($item['product_image']) ?>" class="w-full h-full object-cover rounded" onerror="this.src='<?=BASE_URL?>/assets/images/no-image.png'">
                                     </div>
@@ -582,7 +582,7 @@ $page_title = "Profil Saya";
                             <?php endforeach; ?>
                             
                             <?php if (count($items) > 2): ?>
-                                <button class="w-full py-2 text-xs text-center text-gray-500 hover:text-red-700 font-medium border-t border-dashed border-gray-200">
+                                <button onclick="toggleExtraItems(<?= $order['id'] ?>)" id="toggle-btn-<?= $order['id'] ?>" class="w-full py-2 text-xs text-center text-gray-500 hover:text-red-700 font-medium border-t border-dashed border-gray-200">
                                     + <?= count($items) - 2 ?> produk lainnya
                                 </button>
                             <?php endif; ?>
@@ -960,6 +960,20 @@ document.addEventListener('DOMContentLoaded', function() {
     }
 
     // Polling Status Otomatis (Smart Polling)
+    window.toggleExtraItems = function(orderId) {
+        const extraItems = document.querySelectorAll('.extra-item-' + orderId);
+        const btn = document.getElementById('toggle-btn-' + orderId);
+        if (!extraItems.length || !btn) return;
+        const isHidden = extraItems[0].classList.contains('hidden');
+        if (isHidden) {
+            extraItems.forEach(el => el.classList.remove('hidden'));
+            btn.innerHTML = 'Sembunyikan produk';
+        } else {
+            extraItems.forEach(el => el.classList.add('hidden'));
+            btn.innerHTML = '+ ' + extraItems.length + ' produk lainnya';
+        }
+    };
+
     function pollStatus(orderId) {
         loadingText.textContent = 'Memverifikasi status pembayaran...';
         loadingOverlay.classList.remove('opacity-0', 'pointer-events-none');

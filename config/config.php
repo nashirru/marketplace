@@ -45,6 +45,63 @@ $projectRoot = dirname(__DIR__);
 app_load_dotenv($projectRoot . '/.env');
 app_load_dotenv($projectRoot . '/.env.local');
 
+// =================================================================
+// GLOBAL ERROR HANDLER — Mencegah HTTP 500 mentah & expose stack trace
+// =================================================================
+ini_set('display_errors', 0);     // WAJIB: jangan tampilkan error ke browser
+ini_set('display_startup_errors', 0);
+ini_set('log_errors', 1);
+
+$_warok_log_dir = $projectRoot . '/logs';
+if (!is_dir($_warok_log_dir)) @mkdir($_warok_log_dir, 0755, true);
+ini_set('error_log', $_warok_log_dir . '/php_error.log');
+error_reporting(E_ALL);
+
+// Rotasi log otomatis jika > 10MB
+$_warok_log_file = $_warok_log_dir . '/php_error.log';
+if (file_exists($_warok_log_file) && filesize($_warok_log_file) > 10 * 1024 * 1024) {
+    rename($_warok_log_file, $_warok_log_file . '.' . date('Ymd_His'));
+}
+unset($_warok_log_dir, $_warok_log_file);
+
+// Handler untuk runtime error (E_WARNING, E_NOTICE, dsb)
+set_error_handler(function ($errno, $errstr, $errfile, $errline) {
+    // Hanya log, jangan tampilkan ke user
+    if (!(error_reporting() & $errno)) return false;
+    error_log(sprintf('[%s] errno=%d %s in %s:%d', date('Y-m-d H:i:s'), $errno, $errstr, $errfile, $errline));
+    // Untuk error fatal yang ditangkap di sini, hentikan eksekusi dengan halaman bersih
+    if (in_array($errno, [E_USER_ERROR])) {
+        if (!headers_sent()) {
+            http_response_code(500);
+            header('Content-Type: text/html; charset=UTF-8');
+        }
+        echo '<!DOCTYPE html><html><head><title>Terjadi Kesalahan</title></head><body style="font-family:sans-serif;text-align:center;padding:80px"><h2>&#9888; Terjadi kesalahan sementara</h2><p>Silakan coba beberapa saat lagi.</p></body></html>';
+        exit(1);
+    }
+    return true; // biarkan PHP handle error non-fatal lainnya
+});
+
+// Handler untuk fatal error (E_ERROR, E_PARSE, E_CORE_ERROR) via shutdown
+register_shutdown_function(function () {
+    $error = error_get_last();
+    if ($error && in_array($error['type'], [E_ERROR, E_PARSE, E_CORE_ERROR, E_COMPILE_ERROR])) {
+        error_log(sprintf(
+            '[FATAL %s] %s in %s:%d',
+            date('Y-m-d H:i:s'), $error['message'], $error['file'], $error['line']
+        ));
+        if (!headers_sent()) {
+            http_response_code(500);
+            header('Content-Type: text/html; charset=UTF-8');
+        }
+        // Flush semua output buffer agar tidak ada output parsial
+        while (ob_get_level() > 0) ob_end_clean();
+        echo '<!DOCTYPE html><html lang="id"><head><meta charset="UTF-8"><title>Gangguan Sementara</title><style>body{font-family:sans-serif;background:#f9fafb;display:flex;align-items:center;justify-content:center;min-height:100vh;margin:0}.box{background:#fff;border-radius:12px;padding:48px 40px;text-align:center;box-shadow:0 4px 24px rgba(0,0,0,.08);max-width:420px}h2{color:#1a1a1a;font-size:1.4rem;margin:0 0 12px}p{color:#6b7280;margin:0 0 24px}a{display:inline-block;padding:10px 24px;background:#dc2626;color:#fff;border-radius:8px;text-decoration:none;font-weight:600}</style></head><body><div class="box"><div style="font-size:2.5rem">&#9888;&#65039;</div><h2>Terjadi Gangguan Sementara</h2><p>Kami sedang memperbaiki masalah ini. Silakan kembali beberapa saat lagi.</p><a href="/">Kembali ke Beranda</a></div></body></html>';
+    }
+});
+// =================================================================
+// AKHIR GLOBAL ERROR HANDLER
+// =================================================================
+
 // --- Pengaturan Aplikasi ---
 // Prioritas:
 // 1) APP_BASE_URL dari environment (.env / server env)
@@ -57,6 +114,7 @@ if (!defined('BASE_URL')) {
         $protocol = (
             (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off')
             || (isset($_SERVER['SERVER_PORT']) && (int)$_SERVER['SERVER_PORT'] === 443)
+            || (isset($_SERVER['HTTP_X_FORWARDED_PROTO']) && $_SERVER['HTTP_X_FORWARDED_PROTO'] === 'https')
         ) ? 'https://' : 'http://';
         $host = $_SERVER['HTTP_HOST'] ?? 'localhost';
         $projectBase = '';
@@ -83,153 +141,49 @@ define('DB_USER', 'root');
 define('DB_PASS', '');
 define('DB_NAME', 'publi');
 
-// --- Buat Koneksi ---
-$conn = new mysqli(DB_HOST, DB_USER, DB_PASS, DB_NAME);
+// --- Buat Koneksi (Persistent Connection: prefix 'p:' agar PHP reuse koneksi, ---
+// --- mengurangi overhead buka koneksi baru tiap request saat high traffic)    ---
+$conn = new mysqli('p:' . DB_HOST, DB_USER, DB_PASS, DB_NAME);
 
-// --- Cek Koneksi ---
+// --- Cek Koneksi (Graceful — tidak expose detail error ke browser) ---
 if ($conn->connect_error) {
-    die("Koneksi ke database gagal: " . $conn->connect_error);
+    // Log detail error ke file, BUKAN ke browser
+    error_log(sprintf(
+        '[DB-CONNECT-ERROR %s] errno=%d %s',
+        date('Y-m-d H:i:s'), $conn->connect_errno, $conn->connect_error
+    ));
+    // Tampilkan halaman maintenance yang bersih ke user
+    http_response_code(503);
+    header('Retry-After: 60');
+    header('Content-Type: text/html; charset=UTF-8');
+    while (ob_get_level() > 0) ob_end_clean();
+    echo '<!DOCTYPE html><html lang="id"><head><meta charset="UTF-8"><title>Gangguan Sementara - Warok Kite</title><style>body{font-family:sans-serif;background:#f9fafb;display:flex;align-items:center;justify-content:center;min-height:100vh;margin:0}.box{background:#fff;border-radius:12px;padding:48px 40px;text-align:center;box-shadow:0 4px 24px rgba(0,0,0,.08);max-width:420px}h2{color:#1a1a1a;font-size:1.4rem;margin:0 0 12px}p{color:#6b7280;margin:0 0 24px}a{display:inline-block;padding:10px 24px;background:#dc2626;color:#fff;border-radius:8px;text-decoration:none;font-weight:600}</style></head><body><div class="box"><div style="font-size:2.5rem">&#128683;</div><h2>Sedang Ada Gangguan</h2><p>Layanan kami sedang tidak dapat diakses sementara waktu. Kami sedang bekerja untuk memulihkannya.</p><a href="javascript:location.reload()">Coba Lagi</a></div></body></html>';
+    exit;
 }
 
 // --- Atur Karakter Set ---
 $conn->set_charset("utf8mb4");
 
+// --- Reset koneksi persistent agar tidak ada state sisa dari request sebelumnya ---
+mysqli_report(MYSQLI_REPORT_OFF); // Matikan exception mode sementara untuk ping
+if (!$conn->ping()) {
+    // Koneksi persistent mati, coba reconnect sekali
+    $conn->close();
+    $conn = new mysqli(DB_HOST, DB_USER, DB_PASS, DB_NAME);
+    if ($conn->connect_error) {
+        error_log('[DB-RECONNECT-FAIL] ' . $conn->connect_error);
+        http_response_code(503);
+        exit('Service Unavailable');
+    }
+    $conn->set_charset('utf8mb4');
+}
+mysqli_report(MYSQLI_REPORT_ERROR | MYSQLI_REPORT_STRICT); // Kembalikan mode strict
+// Rollback transaksi yang mungkin tidak ditutup di request sebelumnya (penting untuk persistent conn)
+if ($conn->in_transaction) {
+    $conn->rollback();
+}
+
 // --- Mulai Session ---
 if (session_status() == PHP_SESSION_NONE) {
     session_start();
 }
-
-
-/*
-====================================================================
- STRUKTUR SQL LENGKAP UNTUK DATABASE (jalankan di phpMyAdmin)
-====================================================================
-
--- Buat database jika belum ada
-CREATE DATABASE IF NOT EXISTS warokkite_db CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci;
-USE warokkite_db;
-
--- Tabel 1: users
-CREATE TABLE `users` (
-  `id` int(11) NOT NULL AUTO_INCREMENT,
-  `name` varchar(100) NOT NULL,
-  `email` varchar(100) NOT NULL,
-  `password` varchar(255) NOT NULL,
-  `role` enum('user','admin') NOT NULL DEFAULT 'user',
-  `created_at` datetime NOT NULL DEFAULT current_timestamp(),
-  PRIMARY KEY (`id`),
-  UNIQUE KEY `email` (`email`)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
-
--- Tabel 2: categories
-CREATE TABLE `categories` (
-  `id` int(11) NOT NULL AUTO_INCREMENT,
-  `name` varchar(100) NOT NULL,
-  `image` varchar(255) DEFAULT NULL,
-  PRIMARY KEY (`id`)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
-
--- Tabel 3: products
-CREATE TABLE `products` (
-  `id` int(11) NOT NULL AUTO_INCREMENT,
-  `category_id` int(11) NOT NULL,
-  `name` varchar(150) NOT NULL,
-  `description` text NOT NULL,
-  `price` decimal(12,2) NOT NULL,
-  `stock` int(11) NOT NULL,
-  `image` varchar(255) NOT NULL,
-  `created_at` datetime NOT NULL DEFAULT current_timestamp(),
-  PRIMARY KEY (`id`),
-  KEY `category_id` (`category_id`),
-  CONSTRAINT `products_ibfk_1` FOREIGN KEY (`category_id`) REFERENCES `categories` (`id`) ON DELETE CASCADE
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
-
--- Tabel 4: cart
-CREATE TABLE `cart` (
-  `id` int(11) NOT NULL AUTO_INCREMENT,
-  `user_id` int(11) NOT NULL,
-  `product_id` int(11) NOT NULL,
-  `quantity` int(11) NOT NULL,
-  `created_at` datetime NOT NULL DEFAULT current_timestamp(),
-  PRIMARY KEY (`id`),
-  KEY `user_id` (`user_id`),
-  KEY `product_id` (`product_id`),
-  CONSTRAINT `cart_ibfk_1` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`) ON DELETE CASCADE,
-  CONSTRAINT `cart_ibfk_2` FOREIGN KEY (`product_id`) REFERENCES `products` (`id`) ON DELETE CASCADE
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
-
--- Tabel 5: orders
-CREATE TABLE `orders` (
-  `id` int(11) NOT NULL AUTO_INCREMENT,
-  `user_id` int(11) NOT NULL,
-  `total` decimal(12,2) NOT NULL,
-  `payment_proof` varchar(255) DEFAULT NULL,
-  `status` enum('waiting_approval','approved','cetak_resi','proses_pengemasan','dikirim','selesai') NOT NULL DEFAULT 'waiting_approval',
-  `created_at` datetime NOT NULL DEFAULT current_timestamp(),
-  PRIMARY KEY (`id`),
-  KEY `user_id` (`user_id`),
-  CONSTRAINT `orders_ibfk_1` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`) ON DELETE CASCADE
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
-
--- Tabel 6: order_items
-CREATE TABLE `order_items` (
-  `id` int(11) NOT NULL AUTO_INCREMENT,
-  `order_id` int(11) NOT NULL,
-  `product_id` int(11) NOT NULL,
-  `quantity` int(11) NOT NULL,
-  `price` decimal(12,2) NOT NULL,
-  PRIMARY KEY (`id`),
-  KEY `order_id` (`order_id`),
-  KEY `product_id` (`product_id`),
-  CONSTRAINT `order_items_ibfk_1` FOREIGN KEY (`order_id`) REFERENCES `orders` (`id`) ON DELETE CASCADE,
-  CONSTRAINT `order_items_ibfk_2` FOREIGN KEY (`product_id`) REFERENCES `products` (`id`)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
-
--- Tabel 7: notifications
-CREATE TABLE `notifications` (
-  `id` int(11) NOT NULL AUTO_INCREMENT,
-  `user_id` int(11) NOT NULL,
-  `message` text NOT NULL,
-  `is_read` tinyint(1) NOT NULL DEFAULT 0,
-  `created_at` datetime NOT NULL DEFAULT current_timestamp(),
-  PRIMARY KEY (`id`),
-  KEY `user_id` (`user_id`),
-  CONSTRAINT `notifications_ibfk_1` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`) ON DELETE CASCADE
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
-
--- Tabel 8: promotions
-CREATE TABLE `promotions` (
-  `id` int(11) NOT NULL AUTO_INCREMENT,
-  `title` varchar(100) NOT NULL,
-  `discount_percent` int(11) NOT NULL,
-  `start_date` date NOT NULL,
-  `end_date` date NOT NULL,
-  PRIMARY KEY (`id`)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
-
-
--- =================================================================
--- CONTOH DATA AWAL (SAMPLE DATA)
--- =================================================================
-
--- 1. User Admin
--- (Password: admin123)
-INSERT INTO `users` (`id`, `name`, `email`, `password`, `role`, `created_at`) VALUES
-(1, 'Admin Warok Kite', 'admin@warokkite.com', '$2y$10$3zR1b.Z0qY.N/uZ3n8mCfe7sCMO4.G6c/nTMJ5/uL7aD8hDq/yBka', 'admin', '2025-10-15 13:30:00');
-
--- 2. Kategori Produk
-INSERT INTO `categories` (`id`, `name`, `image`) VALUES
-(1, 'Kesenian', 'kesenian.png'),
-(2, 'Kuliner', 'kuliner.png'),
-(3, 'Fashion', 'fashion.png'),
-(4, 'Kerajinan', 'kerajinan.png');
-
--- 3. Produk
-INSERT INTO `products` (`id`, `category_id`, `name`, `description`, `price`, `stock`, `image`, `created_at`) VALUES
-(1, 1, 'Topeng Bujang Ganong', 'Topeng kayu asli buatan tangan pengrajin lokal Ponorogo. Dibuat dari kayu pule yang ringan dan kuat.', 150000.00, 15, 'https://placehold.co/400x400/E2E8F0/4A5568?text=Topeng', '2025-10-15 13:35:00'),
-(2, 2, 'Sate Ayam Ponorogo (Frozen)', 'Paket sate ayam 20 tusuk (frozen) dengan bumbu kacang khas. Siap dibakar kapan saja.', 45000.00, 50, 'https://placehold.co/400x400/FEE2E2/B91C1C?text=Sate', '2025-10-15 13:36:00'),
-(3, 3, 'Batik Tulis Motif Reog', 'Kain batik tulis asli dari Ponorogo dengan motif Reog yang ikonik. Ukuran 2x1.5 meter.', 250000.00, 20, 'https://placehold.co/400x400/DBEAFE/1E40AF?text=Batik', '2025-10-15 13:37:00'),
-(4, 4, 'Miniatur Dadak Merak', 'Kerajinan miniatur Dadak Merak Reog Ponorogo, cocok untuk hiasan dinding atau koleksi.', 350000.00, 10, 'https://placehold.co/400x400/D1FAE5/065F46?text=Miniatur', '2025-10-15 13:38:00');
-
-*/
-?>

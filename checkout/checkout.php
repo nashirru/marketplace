@@ -133,7 +133,7 @@ $page_title = 'Checkout - ' . (get_setting($conn, 'store_name') ?? 'Warok Kite')
                 <div id="address-form-fields">
                     <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
                         <div><label for="full_name" class="block text-sm font-medium text-gray-700 mb-1">Nama Lengkap</label><input type="text" id="full_name" name="full_name" class="w-full p-2 border rounded-md" required></div>
-                        <div><label for="phone_number" class="block text-sm font-medium text-gray-700 mb-1">Nomor Telepon</label><input type="tel" id="phone_number" name="phone_number" class="w-full p-2 border rounded-md" required></div>
+                        <div><label for="phone_number" class="block text-sm font-medium text-gray-700 mb-1">Nomor Telepon</label><input type="tel" id="phone_number" name="phone_number" class="w-full p-2 border rounded-md" required pattern="^\+62[0-9]{8,15}$" title="Nomor telepon harus diawali dengan +62 dan diikuti minimal 8 digit angka." placeholder="+628123456789" oninput="if(!this.value.startsWith('+62')) this.value = '+62' + this.value.replace(/^[^\d]+/, '');"></div>
                     </div>
                     <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 mb-4">
                         <div><label for="province" class="block text-sm font-medium text-gray-700 mb-1">Provinsi</label><input type="text" id="province" name="province" class="w-full p-2 border rounded-md" required></div>

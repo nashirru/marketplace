@@ -366,36 +366,54 @@ function get_cart_items_for_display($conn, $user_id) {
             $cart_items[] = $row;
         }
     } else {
-        // LOGIKA GUEST - MANUAL JOIN VARIATION
+        // ✅ FIX N+1: Batch query semua variasi sekaligus, bukan per-item
         $products_data = array_column($result->fetch_all(MYSQLI_ASSOC), null, 'product_id');
-        
-        foreach ($_SESSION['cart'] as $pid => $item) {
-            if (isset($products_data[$pid])) {
-                $row = $products_data[$pid];
-                $row['quantity'] = $item['quantity'];
-                $row['variation_id'] = $item['variation_id'] ?? null;
-                
-                // Jika Guest punya variasi, kita perlu ambil nama/harga variasi tersebut
-                if ($row['variation_id']) {
-                    $v_stmt = $conn->prepare("SELECT name, price, stock, image FROM product_variations WHERE id = ?");
-                    $v_stmt->bind_param("i", $row['variation_id']);
-                    $v_stmt->execute();
-                    $v_res = $v_stmt->get_result()->fetch_assoc();
-                    $v_stmt->close();
-                    
-                    if ($v_res) {
-                        $row['variation_name'] = $v_res['name'];
-                        $row['price'] = $v_res['price']; // Override harga dasar
-                        $row['stock'] = $v_res['stock']; // Override stok dasar
-                        if ($v_res['image']) $row['image'] = $v_res['image'];
-                    }
-                } else {
-                    $row['variation_name'] = null;
-                }
-                
-                $cart_items[] = $row;
-            }
+        $stmt->close();
+
+        // Kumpulkan semua variation_id unik yang dibutuhkan
+        $needed_vids = [];
+        foreach ($_SESSION['cart'] as $item) {
+            $vid = isset($item['variation_id']) && $item['variation_id'] > 0 ? (int)$item['variation_id'] : null;
+            if ($vid) $needed_vids[$vid] = true;
         }
+
+        // 1 query untuk semua variasi (bukan 1 query per item)
+        $variations_data = [];
+        if (!empty($needed_vids)) {
+            $vid_list = array_keys($needed_vids);
+            $vph = implode(',', array_fill(0, count($vid_list), '?'));
+            $v_stmt = $conn->prepare("SELECT id, name, price, stock, image FROM product_variations WHERE id IN ($vph)");
+            $v_stmt->bind_param(str_repeat('i', count($vid_list)), ...$vid_list);
+            $v_stmt->execute();
+            $v_result = $v_stmt->get_result();
+            while ($v_row = $v_result->fetch_assoc()) {
+                $variations_data[$v_row['id']] = $v_row;
+            }
+            $v_stmt->close();
+        }
+
+        // Gabungkan dari memory — tidak ada query lagi di sini
+        foreach ($_SESSION['cart'] as $pid => $item) {
+            if (!isset($products_data[$pid])) continue;
+            $row = $products_data[$pid];
+            $row['quantity']   = $item['quantity'];
+            $row['variation_id'] = isset($item['variation_id']) && $item['variation_id'] > 0
+                ? (int)$item['variation_id'] : null;
+
+            if ($row['variation_id'] && isset($variations_data[$row['variation_id']])) {
+                $vd = $variations_data[$row['variation_id']];
+                $row['variation_name']  = $vd['name'];
+                $row['variation_price'] = $vd['price'];
+                $row['price'] = $vd['price'];
+                $row['stock'] = $vd['stock'];
+                if ($vd['image']) $row['image'] = $vd['image'];
+            } else {
+                $row['variation_name']  = null;
+                $row['variation_price'] = null;
+            }
+            $cart_items[] = $row;
+        }
+        return $cart_items;
     }
     $stmt->close();
     return $cart_items;
@@ -478,11 +496,32 @@ function get_default_user_address($conn, $user_id) {
 }
 
 function generate_order_number($conn) {
-    $date_part = date('ymd');
-    $stmt = $conn->prepare("SELECT COUNT(id) as total_today FROM orders WHERE created_at >= CURDATE()");
-    $stmt->execute();
-    $sequence = ($stmt->get_result()->fetch_assoc()['total_today'] ?? 0) + 1;
-    return "WK" . $date_part . str_pad($sequence, 4, '0', STR_PAD_LEFT);
+    // ✅ FIX: GET_LOCK mencegah race condition (2 checkout bersamaan = nomor berbeda)
+    $lock_name = 'warok_order_num_lock';
+    $lock_stmt = $conn->prepare("SELECT GET_LOCK(?, 5) as locked");
+    $lock_stmt->bind_param('s', $lock_name);
+    $lock_stmt->execute();
+    $locked = (int)($lock_stmt->get_result()->fetch_assoc()['locked'] ?? 0);
+    $lock_stmt->close();
+    if (!$locked) {
+        error_log('[generate_order_number] Lock timeout, fallback ke uniqid');
+        return 'WK' . strtoupper(substr(uniqid('', true), -8));
+    }
+    $order_number = null;
+    try {
+        $date_part = date('ymd');
+        $stmt = $conn->prepare("SELECT COUNT(id) as total_today FROM orders WHERE created_at >= CURDATE()");
+        $stmt->execute();
+        $sequence = ($stmt->get_result()->fetch_assoc()['total_today'] ?? 0) + 1;
+        $stmt->close();
+        $order_number = 'WK' . $date_part . str_pad($sequence, 4, '0', STR_PAD_LEFT);
+    } finally {
+        $ul = $conn->prepare("SELECT RELEASE_LOCK(?)");
+        $ul->bind_param('s', $lock_name);
+        $ul->execute();
+        $ul->close();
+    }
+    return $order_number;
 }
 
 
@@ -565,30 +604,40 @@ function set_default_address($conn, $user_id, $address_id) {
 
 
 function cancel_overdue_orders($conn) {
+    // ✅ FIX: Throttle agar tidak dieksekusi tiap web request
+    // Idealnya pindahkan ke cron job: sistem/cron_cancel_orders.php
+    if (PHP_SAPI !== 'cli') {
+        $lock_file = sys_get_temp_dir() . '/warok_cancel_overdue.lock';
+        if (file_exists($lock_file) && (time() - filemtime($lock_file)) < 300) {
+            return; // sudah jalan < 5 menit lalu, skip
+        }
+        file_put_contents($lock_file, date('Y-m-d H:i:s'));
+    }
+
     $stmt_find = $conn->prepare("SELECT id FROM orders WHERE status = 'waiting_payment' AND created_at < NOW() - INTERVAL 1 DAY");
     $stmt_find->execute();
-    $result = $stmt_find->get_result();
+    $result   = $stmt_find->get_result();
     $order_ids = array_column($result->fetch_all(MYSQLI_ASSOC), 'id');
+    $stmt_find->close();
     if (empty($order_ids)) return;
 
     $conn->begin_transaction();
     try {
-        // PERHATIKAN: Logika pengembalian stok harus dimodifikasi jika stok variasi dipisah
-        // Tapi untuk simplifikasi sistem yang ada, kita asumsikan trigger atau logika stok produk utama dulu
-        // Idealnya: Check order_items, kalau ada variation_id, kembalikan ke tabel product_variations
-        
-        $stmt_stock = $conn->prepare("UPDATE products p JOIN order_items oi ON p.id = oi.product_id SET p.stock = p.stock + oi.quantity WHERE oi.order_id = ?");
+        $stmt_stock  = $conn->prepare("UPDATE products p JOIN order_items oi ON p.id = oi.product_id SET p.stock = p.stock + oi.quantity WHERE oi.order_id = ?");
         $stmt_cancel = $conn->prepare("UPDATE orders SET status = 'cancelled' WHERE id = ?");
         foreach ($order_ids as $order_id) {
-            $stmt_stock->bind_param("i", $order_id);
+            $stmt_stock->bind_param('i', $order_id);
             $stmt_stock->execute();
-            $stmt_cancel->bind_param("i", $order_id);
+            $stmt_cancel->bind_param('i', $order_id);
             $stmt_cancel->execute();
         }
         $conn->commit();
+        $stmt_stock->close();
+        $stmt_cancel->close();
+        error_log(sprintf('[cancel_overdue %s] %d pesanan dibatalkan.', date('Y-m-d H:i:s'), count($order_ids)));
     } catch (Exception $e) {
         $conn->rollback();
-        error_log("Gagal membatalkan pesanan: " . $e->getMessage());
+        error_log('Gagal membatalkan pesanan: ' . $e->getMessage());
     }
 }
 

@@ -26,6 +26,18 @@ foreach ($dirs as $dir) {
 
 // --- HELPER FUNCTIONS ---
 
+// Cek kolom opsional agar query tetap jalan di DB versi lama.
+function column_exists($conn, $table, $column) {
+    $table = preg_replace('/[^a-zA-Z0-9_]/', '', (string)$table);
+    $column = preg_replace('/[^a-zA-Z0-9_]/', '', (string)$column);
+    if ($table === '' || $column === '') return false;
+
+    // NOTE: MariaDB tidak mendukung placeholder '?' untuk statement SHOW pada prepared statement.
+    $sql = "SHOW COLUMNS FROM `{$table}` LIKE '{$column}'";
+    $res = $conn->query($sql);
+    if (!$res) return false;
+    return ($res->num_rows > 0);
+}
 // Fungsi upload standar (untuk non-kompresi / fallback)
 function upload_image_file($file_data, $upload_dir) {
     if ($file_data['error'] === UPLOAD_ERR_OK) {
@@ -64,6 +76,16 @@ if (isset($_POST['save_product'])) {
     $name = sanitize_input($_POST['name']);
     $category_id = (int)$_POST['category_id'];
     $description = $_POST['description']; // Deskripsi boleh HTML
+    // Ambil stok saat ini untuk mendeteksi restock (auto reset limit).
+    $current_stock_db = null;
+    if ($product_id > 0) {
+        $stmt_old = $conn->prepare("SELECT stock FROM products WHERE id = ? LIMIT 1");
+        $stmt_old->bind_param("i", $product_id);
+        $stmt_old->execute();
+        $row_old = $stmt_old->get_result()->fetch_assoc();
+        $current_stock_db = (int)($row_old['stock'] ?? 0);
+        $stmt_old->close();
+    }
     
     // Logika Limit Pembelian
     $limit_type = $_POST['limit_type'] ?? 'unlimited';
@@ -153,6 +175,17 @@ if (isset($_POST['save_product'])) {
             $stmt = $conn->prepare("UPDATE products SET category_id=?, name=?, description=?, price=?, stock=?, purchase_limit=?, is_active=1, image=?, has_variation=? WHERE id=?");
             $stmt->bind_param("issdiisii", $category_id, $name, $description, $final_price, $final_stock, $purchase_limit, $image_name, $has_variation, $product_id);
             if (!$stmt->execute()) throw new Exception("Gagal update produk utama: " . $stmt->error);
+            // Auto reset limit saat stok diubah (tanpa perlu klik tombol Reset Limit).
+            if ($has_variation == 0 && $purchase_limit > 0 && $current_stock_db !== null && (int)$current_stock_db !== (int)$final_stock) {
+                $has_last_stock_reset = column_exists($conn, 'products', 'last_stock_reset');
+                $sql_reset = $has_last_stock_reset
+                    ? "UPDATE products SET stock_cycle_id = stock_cycle_id + 1, last_stock_reset = NOW() WHERE id = ?"
+                    : "UPDATE products SET stock_cycle_id = stock_cycle_id + 1 WHERE id = ?";
+                $stmt_reset = $conn->prepare($sql_reset);
+                $stmt_reset->bind_param("i", $product_id);
+                if (!$stmt_reset->execute()) throw new Exception("Gagal auto reset limit: " . $stmt_reset->error);
+                $stmt_reset->close();
+            }
             $current_product_id = $product_id;
             $stmt->close();
         } else {
@@ -260,6 +293,17 @@ if (isset($_POST['save_product'])) {
             // UPDATE PRODUK UTAMA dengan Total Stok & Harga Terendah dari Variasi
             $final_price_update = $min_price_calculated ?? 0;
             $conn->query("UPDATE products SET price = $final_price_update, stock = $total_stock_calculated WHERE id = $current_product_id");
+            // Auto reset limit saat stok (hasil variasi) berubah.
+            if ($product_id > 0 && $purchase_limit > 0 && $current_stock_db !== null && (int)$current_stock_db !== (int)$total_stock_calculated) {
+                $has_last_stock_reset = column_exists($conn, 'products', 'last_stock_reset');
+                $sql_reset = $has_last_stock_reset
+                    ? "UPDATE products SET stock_cycle_id = stock_cycle_id + 1, last_stock_reset = NOW() WHERE id = ?"
+                    : "UPDATE products SET stock_cycle_id = stock_cycle_id + 1 WHERE id = ?";
+                $stmt_reset = $conn->prepare($sql_reset);
+                $stmt_reset->bind_param("i", $current_product_id);
+                if (!$stmt_reset->execute()) throw new Exception("Gagal auto reset limit (variasi): " . $stmt_reset->error);
+                $stmt_reset->close();
+            }
 
         } else {
             // JIKA VARIASI DIMATIKAN
@@ -324,7 +368,13 @@ if (isset($_POST['reset_limit'])) {
     $product_id = (int)$_POST['product_id'];
     if ($product_id > 0) {
         // Increment stock_cycle_id agar history pembelian user dianggap kadaluarsa untuk produk ini
-        $stmt = $conn->prepare("UPDATE products SET stock_cycle_id = stock_cycle_id + 1, last_stock_reset = NOW() WHERE id = ?");
+        // last_stock_reset bersifat opsional (DB lama mungkin belum punya kolom ini).
+        $has_last_stock_reset = column_exists($conn, 'products', 'last_stock_reset');
+        $sql = $has_last_stock_reset
+            ? "UPDATE products SET stock_cycle_id = stock_cycle_id + 1, last_stock_reset = NOW() WHERE id = ?"
+            : "UPDATE products SET stock_cycle_id = stock_cycle_id + 1 WHERE id = ?";
+
+        $stmt = $conn->prepare($sql);
         $stmt->bind_param("i", $product_id);
         if ($stmt->execute()) {
             set_flashdata('success', 'Limit pembelian user untuk produk ini berhasil di-reset.');
@@ -353,7 +403,12 @@ if (isset($_POST['bulk_stock_update'])) {
     if (!empty($valid_updates)) {
         $conn->begin_transaction();
         try {
-            $stmt = $conn->prepare("UPDATE products SET stock = stock + ?, last_stock_reset = NOW() WHERE id = ?");
+            // last_stock_reset bersifat opsional (DB lama mungkin belum punya kolom ini).
+            $has_last_stock_reset = column_exists($conn, 'products', 'last_stock_reset');
+            $sql = $has_last_stock_reset
+                ? "UPDATE products SET stock = stock + ?, stock_cycle_id = stock_cycle_id + 1, last_stock_reset = NOW() WHERE id = ?"
+                : "UPDATE products SET stock = stock + ?, stock_cycle_id = stock_cycle_id + 1 WHERE id = ?";
+            $stmt = $conn->prepare($sql);
             foreach ($valid_updates as $product_id => $stock_to_add) {
                 $stmt->bind_param("ii", $stock_to_add, $product_id);
                 $stmt->execute();
@@ -707,3 +762,8 @@ $current_title = $titles[$page_name] ?? 'Halaman Admin';
     </script>
 </body>
 </html>
+
+
+
+
+

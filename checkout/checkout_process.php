@@ -167,6 +167,7 @@ try {
         
         $items_to_insert[] = [
             'product_id' => $product_id,
+            'stock_cycle_id' => (int)$parent_meta['stock_cycle_id'],
             'variation_id' => $variation_id, // Simpan ID variasi
             'quantity' => $quantity, 
             'price' => $current_price
@@ -249,6 +250,9 @@ try {
     // ============================================================
     // 6. BUAT ORDER & ITEM
     // ============================================================
+    if (!preg_match('/^\+62[0-9]{8,15}$/', str_replace([' ', '-'], '', $address_data['phone_number']))) {
+        throw new Exception("Nomor telepon tidak valid. Harus diawali dengan +62 dan minimal 8 digit angka.");
+    }
     $order_number = generate_order_number($conn);
     $status = 'waiting_payment';
     $order_hash = md5($order_number . time() . rand()); // Hash unik tambahan
@@ -296,21 +300,35 @@ try {
     }
     $order_id = $stmt_order->insert_id;
     $stmt_order->close();
-
     // Insert Items dengan Variation ID
-    $stmt_items = $conn->prepare("INSERT INTO order_items (order_id, product_id, variation_id, quantity, price) VALUES (?, ?, ?, ?, ?)");
-    foreach ($items_to_insert as $item) {
-        // variation_id bisa null, pastikan bind_param handle null dengan benar (tapi s di bind_param akan ubah null jadi empty string/0 di beberapa driver, lebih aman i dan kirim null)
-        $var_id_val = $item['variation_id'];
-        
-        $stmt_items->bind_param("iiiid", $order_id, $item['product_id'], $var_id_val, $item['quantity'], $item['price']);
-        if(!$stmt_items->execute()) {
-             throw new Exception("Gagal menyimpan item pesanan: " . $stmt_items->error);
-        }
+    $has_order_items_stock_cycle = false;
+    $check_col = $conn->query("SHOW COLUMNS FROM order_items LIKE 'stock_cycle_id'");
+    if ($check_col && $check_col->num_rows > 0) {
+        $has_order_items_stock_cycle = true;
     }
-    $stmt_items->close();
 
-    
+    if ($has_order_items_stock_cycle) {
+        $stmt_items = $conn->prepare("INSERT INTO order_items (order_id, product_id, stock_cycle_id, variation_id, quantity, price) VALUES (?, ?, ?, ?, ?, ?)");
+        foreach ($items_to_insert as $item) {
+            $var_id_val = $item['variation_id'];
+            $stmt_items->bind_param("iiiiid", $order_id, $item['product_id'], $item['stock_cycle_id'], $var_id_val, $item['quantity'], $item['price']);
+            if (!$stmt_items->execute()) {
+                throw new Exception("Gagal menyimpan item pesanan: " . $stmt_items->error);
+            }
+        }
+        $stmt_items->close();
+    } else {
+        // Fallback untuk DB lama (tanpa kolom stock_cycle_id)
+        $stmt_items = $conn->prepare("INSERT INTO order_items (order_id, product_id, variation_id, quantity, price) VALUES (?, ?, ?, ?, ?)");
+        foreach ($items_to_insert as $item) {
+            $var_id_val = $item['variation_id'];
+            $stmt_items->bind_param("iiiid", $order_id, $item['product_id'], $var_id_val, $item['quantity'], $item['price']);
+            if (!$stmt_items->execute()) {
+                throw new Exception("Gagal menyimpan item pesanan: " . $stmt_items->error);
+            }
+        }
+        $stmt_items->close();
+    }
     // ============================================================
     // 7. MIDTRANS & FINALISASI
     // ============================================================
@@ -379,3 +397,6 @@ try {
     ]);
 }
 ?>
+
+
+
