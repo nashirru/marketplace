@@ -278,26 +278,36 @@ document.addEventListener('DOMContentLoaded', function() {
                 dbOrderId = result.db_order_id;
                 let paymentHandled = false;
 
+                // [FIX] Cek apakah Midtrans Snap SDK sudah dimuat
+                // Saat traffic tinggi, CDN Midtrans bisa lambat/timeout
+                if (typeof window.snap === 'undefined' || typeof window.snap.pay !== 'function') {
+                    let waitAttempts = 0;
+                    const maxWait = 20; // 20 x 500ms = 10 detik
+                    await new Promise((resolve, reject) => {
+                        const checkInterval = setInterval(() => {
+                            waitAttempts++;
+                            if (typeof window.snap !== 'undefined' && typeof window.snap.pay === 'function') {
+                                clearInterval(checkInterval);
+                                resolve();
+                            } else if (waitAttempts >= maxWait) {
+                                clearInterval(checkInterval);
+                                reject(new Error('Midtrans payment SDK gagal dimuat. Periksa koneksi internet Anda dan coba refresh halaman.'));
+                            }
+                        }, 500);
+                    });
+                }
+
                 window.snap.pay(result.snap_token, {
                     onSuccess: function(res){
                         paymentHandled = true;
-                        // ============================================================
-                        // PERBAIKAN: Arahkan ke poller, bukan profil
-                        // ============================================================
                         window.location.href = `${paymentStatusUrlBase}?status=success&order_id=${dbOrderId}&message=${encodeURIComponent('Pembayaran berhasil! Memverifikasi...')}`;
                     },
                     onPending: function(res){
                         paymentHandled = true;
-                        // ============================================================
-                        // PERBAIKAN: Arahkan ke poller, bukan profil
-                        // ============================================================
                         window.location.href = `${paymentStatusUrlBase}?status=pending&order_id=${dbOrderId}&message=${encodeURIComponent('Pembayaran Anda tertunda. Memverifikasi...')}`;
                     },
                     onError: function(res){
                         paymentHandled = true;
-                        // ============================================================
-                        // PERBAIKAN: Arahkan ke poller, bukan profil
-                        // ============================================================
                         window.location.href = `${paymentStatusUrlBase}?status=error&order_id=${dbOrderId}&message=${encodeURIComponent('Pembayaran gagal, silakan coba lagi.')}`;
                     },
                     onClose: function(){

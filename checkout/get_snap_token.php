@@ -1,18 +1,26 @@
 <?php
 // File: checkout/get_snap_token.php
-// VERSI IQ 180: FIXED SQL ERROR
-// Deskripsi: Menangani request token Snap Midtrans.
-// 
-// PERBAIKAN PENTING:
-// 1. MENGHAPUS query "UPDATE orders SET midtrans_order_id..." yang menyebabkan error "Unknown column".
-//    Data history pembayaran sudah dicatat dengan benar di tabel 'payment_attempts'.
-// 2. Menambahkan validasi items yang lebih ketat.
+// Deskripsi: Menangani request token Snap Midtrans untuk pembayaran ulang dari halaman profil.
 
 // Matikan display error agar tidak merusak format JSON
 error_reporting(E_ALL);
-ini_set('display_errors', 0); 
+ini_set('display_errors', 0);
 
 header('Content-Type: application/json');
+
+/**
+ * Generate ID unik untuk Midtrans attempt.
+ * Menggunakan microtime + random suffix untuk menghindari duplicate entry saat traffic tinggi.
+ *
+ * @param string $order_number Nomor order (contoh: WK2605090039)
+ * @return string ID unik (contoh: WK2605090039-17783304478923742)
+ */
+function generate_unique_attempt_id($order_number)
+{
+    $micro = substr(str_replace('.', '', (string)microtime(true)), -4);
+    $rand  = str_pad(mt_rand(0, 999), 3, '0', STR_PAD_LEFT);
+    return $order_number . '-' . time() . $micro . $rand;
+}
 
 try {
     // Load dependensi
@@ -20,7 +28,7 @@ try {
     require_once '../sistem/sistem.php';
     require_once '../midtrans/config_midtrans.php';
 
-    if (session_status() == PHP_SESSION_NONE) {
+    if (session_status() === PHP_SESSION_NONE) {
         session_start();
     }
 
@@ -53,13 +61,11 @@ try {
         throw new Exception("Pesanan ini tidak dalam status menunggu pembayaran.");
     }
 
-    // Ambil Item Pesanan (Manual Query untuk bypassing sistem lama)
-    // Menggunakan LEFT JOIN ke product_variations untuk mendapatkan nama variasi
-    $order_items = [];
+    // Ambil Item Pesanan dengan nama variasi
     $sql_items = "
-        SELECT oi.id, oi.product_id, oi.variation_id, oi.price, oi.quantity, 
-               p.name as product_name, 
-               pv.name as variation_name
+        SELECT oi.id, oi.product_id, oi.variation_id, oi.price, oi.quantity,
+               p.name AS product_name,
+               pv.name AS variation_name
         FROM order_items oi
         JOIN products p ON oi.product_id = p.id
         LEFT JOIN product_variations pv ON oi.variation_id = pv.id
@@ -73,7 +79,8 @@ try {
     $stmt_items->bind_param("i", $order_id);
     $stmt_items->execute();
     $result_items = $stmt_items->get_result();
-    
+
+    $order_items = [];
     while ($row = $result_items->fetch_assoc()) {
         $order_items[] = $row;
     }
@@ -100,7 +107,7 @@ try {
             'id'       => $item_id,
             'price'    => (int)$item['price'],
             'quantity' => (int)$item['quantity'],
-            'name'     => substr($item_name, 0, 50) // Midtrans limit 50 chars
+            'name'     => substr($item_name, 0, 50),
         ];
     }
 
@@ -116,13 +123,12 @@ try {
             'id'       => 'SHIPPING',
             'price'    => $diff,
             'quantity' => 1,
-            'name'     => 'Biaya Pengiriman'
+            'name'     => 'Biaya Pengiriman',
         ];
     }
 
-    // Generate ID Order Unik untuk Midtrans (Format: ORDERID-TIMESTAMP)
-    // Ini penting agar user bisa mencoba bayar ulang jika sebelumnya gagal/closed
-    $attempt_order_number = $order['order_number'] . '-' . time();
+    // Generate ID Order Unik untuk Midtrans
+    $attempt_order_number = generate_unique_attempt_id($order['order_number']);
 
     // Parameter Transaksi Midtrans
     $transaction_params = [
@@ -135,62 +141,79 @@ try {
             'email'      => $_SESSION['user_email'] ?? 'customer@warokkite.com',
             'phone'      => $order['phone_number'],
             'billing_address' => [
-                'first_name' => substr($order['full_name'], 0, 50),
-                'address'    => substr($order['address_line_1'], 0, 200),
-                'city'       => $order['city'],
-                'postal_code'=> $order['postal_code'],
-                'country_code'=> 'IDN'
+                'first_name'   => substr($order['full_name'], 0, 50),
+                'address'      => substr($order['address_line_1'], 0, 200),
+                'city'         => $order['city'],
+                'postal_code'  => $order['postal_code'],
+                'country_code' => 'IDN',
             ],
             'shipping_address' => [
-                'first_name' => substr($order['full_name'], 0, 50),
-                'address'    => substr($order['address_line_1'], 0, 200),
-                'city'       => $order['city'],
-                'postal_code'=> $order['postal_code'],
-                'country_code'=> 'IDN'
-            ]
+                'first_name'   => substr($order['full_name'], 0, 50),
+                'address'      => substr($order['address_line_1'], 0, 200),
+                'city'         => $order['city'],
+                'postal_code'  => $order['postal_code'],
+                'country_code' => 'IDN',
+            ],
         ],
         'item_details' => $midtrans_items,
-        // Redirect URL setelah selesai di Snap
-        // Kita arahkan kembali ke profile tab orders
         'callbacks' => [
-            'finish' => BASE_URL . '/profile/profile.php?tab=orders'
-        ]
+            'finish' => BASE_URL . '/profile/profile.php?tab=orders',
+        ],
     ];
 
     // Request Token ke Midtrans
-    try {
-        $snapToken = \Midtrans\Snap::getSnapToken($transaction_params);
-    } catch (\Exception $midtrans_error) {
-        throw new Exception("Gagal menghubungi Midtrans: " . $midtrans_error->getMessage());
+    $snapToken = \Midtrans\Snap::getSnapToken($transaction_params);
+
+    // Simpan Attempt ke Database dengan retry loop
+    $max_retries = 3;
+    $attempt_saved = false;
+
+    for ($retry = 0; $retry < $max_retries; $retry++) {
+        $stmt_attempt = $conn->prepare(
+            "INSERT INTO payment_attempts (order_id, attempt_order_number, snap_token, status) VALUES (?, ?, ?, 'pending')"
+        );
+        if (!$stmt_attempt) {
+            break;
+        }
+
+        $stmt_attempt->bind_param("iss", $order_id, $attempt_order_number, $snapToken);
+
+        if ($stmt_attempt->execute()) {
+            $attempt_saved = true;
+            $stmt_attempt->close();
+            break;
+        }
+
+        // Jika error karena duplicate key (errno 1062), regenerate dan retry
+        if ($conn->errno === 1062) {
+            error_log("Duplicate attempt_order_number detected (retry {$retry}): {$attempt_order_number}");
+            $stmt_attempt->close();
+            usleep(50000); // Tunggu 50ms sebelum retry
+            $attempt_order_number = generate_unique_attempt_id($order['order_number']);
+            continue;
+        }
+
+        $stmt_attempt->close();
+        break;
     }
 
-    // Simpan Attempt ke Database
-    // Tabel 'payment_attempts' menyimpan history snap_token dan attempt_order_number
-    $stmt_attempt = $conn->prepare("INSERT INTO payment_attempts (order_id, attempt_order_number, snap_token, status) VALUES (?, ?, ?, 'pending')");
-    if ($stmt_attempt) {
-        $stmt_attempt->bind_param("iss", $order_id, $attempt_order_number, $snapToken);
-        $stmt_attempt->execute();
-        $stmt_attempt->close();
+    if (!$attempt_saved) {
+        error_log("Failed to save payment attempt after {$max_retries} retries for order: {$order_id}");
     }
-    
-    // [FIXED] MENGHAPUS BLOCK QUERY UPDATE 'midtrans_order_id' YANG MENYEBABKAN ERROR
-    // Kolom 'midtrans_order_id' tidak ada di tabel 'orders'.
-    // Data attempt sudah aman tersimpan di tabel 'payment_attempts'.
 
     // Return JSON Success
     echo json_encode([
-        'success' => true,
-        'snap_token' => $snapToken,
-        'db_order_id' => $order_id,
-        'order_number' => $order['order_number']
+        'success'      => true,
+        'snap_token'   => $snapToken,
+        'db_order_id'  => $order_id,
+        'order_number' => $order['order_number'],
     ]);
 
 } catch (Exception $e) {
     // Return JSON Error
     http_response_code(500);
     echo json_encode([
-        'success' => false, 
-        'message' => $e->getMessage()
+        'success' => false,
+        'message' => $e->getMessage(),
     ]);
 }
-?>

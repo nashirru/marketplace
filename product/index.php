@@ -43,10 +43,8 @@ $page_title = "Semua Produk";
 
 <!DOCTYPE html>
 <html lang="id">
-<head>
     <!-- PERBAIKAN: Menggunakan partial.php untuk head -->
     <?php page_head($page_title, $conn); ?>
-</head>
 <body class="bg-gray-50">
 
     <?php navbar($conn); ?>

@@ -323,7 +323,7 @@ try {
         foreach ($items_to_insert as $item) {
             $var_id_val = $item['variation_id'];
             $stmt_items->bind_param("iiiid", $order_id, $item['product_id'], $var_id_val, $item['quantity'], $item['price']);
-            if (!$stmt_items->execute()) {
+             if (!$stmt_items->execute()) {
                 throw new Exception("Gagal menyimpan item pesanan: " . $stmt_items->error);
             }
         }
@@ -332,8 +332,14 @@ try {
     // ============================================================
     // 7. MIDTRANS & FINALISASI
     // ============================================================
-    $user_data_db = get_user_by_id($conn, $user_id); // Ganti nama variable agar tidak konflik
-    $attempt_order_number = $order_number . '-T' . time(); 
+    $user_data_db = get_user_by_id($conn, $user_id);
+
+    // [FIX] Generate attempt_order_number dengan microsecond + random suffix
+    // SEBELUMNYA: $order_number . '-T' . time()  → rentan duplikasi saat double-click / traffic tinggi
+    // SOLUSI: microtime(true) memberikan presisi microsecond + random 3 digit tambahan
+    $micro = substr(str_replace('.', '', (string)microtime(true)), -4);
+    $rand_suffix = str_pad(mt_rand(0, 999), 3, '0', STR_PAD_LEFT);
+    $attempt_order_number = $order_number . '-T' . time() . $micro . $rand_suffix;
 
     // Build payload
     $transaction_params = [
@@ -355,11 +361,33 @@ try {
         throw new Exception("Payment gateway error: " . $midtrans_error->getMessage());
     }
 
-    // Simpan attempt
-    $stmt_attempt = $conn->prepare("INSERT INTO payment_attempts (order_id, attempt_order_number, snap_token, status) VALUES (?, ?, ?, 'pending')");
-    $stmt_attempt->bind_param("iss", $order_id, $attempt_order_number, $snapToken);
-    $stmt_attempt->execute();
-    $stmt_attempt->close();
+    // [FIX] Simpan attempt dengan retry loop untuk menangani edge case duplikasi
+    $max_retries = 3;
+    $attempt_saved = false;
+    for ($retry = 0; $retry < $max_retries; $retry++) {
+        $stmt_attempt = $conn->prepare("INSERT INTO payment_attempts (order_id, attempt_order_number, snap_token, status) VALUES (?, ?, ?, 'pending')");
+        $stmt_attempt->bind_param("iss", $order_id, $attempt_order_number, $snapToken);
+        if ($stmt_attempt->execute()) {
+            $attempt_saved = true;
+            $stmt_attempt->close();
+            break;
+        }
+        // Jika duplicate key error, regenerate dan retry
+        if ($conn->errno === 1062) {
+            error_log("Checkout: Duplicate attempt_order_number (retry $retry): $attempt_order_number");
+            $stmt_attempt->close();
+            usleep(50000); // Tunggu 50ms
+            $micro = substr(str_replace('.', '', (string)microtime(true)), -4);
+            $rand_suffix = str_pad(mt_rand(0, 999), 3, '0', STR_PAD_LEFT);
+            $attempt_order_number = $order_number . '-T' . time() . $micro . $rand_suffix;
+            continue;
+        }
+        $stmt_attempt->close();
+        throw new Exception("Gagal menyimpan data pembayaran: " . $conn->error);
+    }
+    if (!$attempt_saved) {
+        throw new Exception("Gagal menyimpan data pembayaran setelah beberapa percobaan. Silakan coba lagi.");
+    }
 
     clear_cart($conn, $user_id);
     $conn->commit();
@@ -397,6 +425,3 @@ try {
     ]);
 }
 ?>
-
-
-

@@ -63,14 +63,9 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
 
 <!DOCTYPE html>
 <html lang="id">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Daftar - Warok Kite</title>
+    <?php page_head('Daftar - Warok Kite', $conn); ?>
     <script src="https://cdn.tailwindcss.com"></script>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
     <style>
-        body { font-family: 'Inter', sans-serif; }
         .captcha-code {
             background-color: #f3f4f6;
             color: #374151;
@@ -85,7 +80,6 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
             user-select: none;
         }
     </style>
-</head>
 <body class="bg-gray-100 flex items-center justify-center min-h-screen p-4">
     <div class="w-full max-w-md bg-white p-8 rounded-lg shadow-md">
         <h2 class="text-2xl font-bold text-center text-gray-800 mb-6">Buat Akun Baru</h2>

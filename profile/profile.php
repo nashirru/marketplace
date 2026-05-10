@@ -1011,7 +1011,15 @@ document.addEventListener('DOMContentLoaded', function() {
     // Event Listener untuk Tombol Bayar
     document.querySelectorAll('.pay-now-button').forEach(btn => {
         btn.addEventListener('click', async function() {
+            // [FIX] Cegah double-click yang menyebabkan duplicate entry
+            if (this.dataset.processing === 'true') return;
+            this.dataset.processing = 'true';
+            this.disabled = true;
+            const originalHtml = this.innerHTML;
+            this.innerHTML = '<i class="fas fa-spinner fa-spin mr-2"></i> Memproses...';
+
             const orderId = this.dataset.orderId;
+            const buttonRef = this; // Simpan referensi tombol
             
             // UI Feedback
             loadingText.textContent = 'Menghubungi Gateway Pembayaran...';
@@ -1039,7 +1047,27 @@ document.addEventListener('DOMContentLoaded', function() {
                 }
                 
                 if (json.success) {
-                    // Trigger Snap Popup
+                    // [FIX] Cek apakah Midtrans Snap SDK sudah dimuat
+                    // Saat traffic tinggi, CDN Midtrans bisa lambat/timeout
+                    if (typeof window.snap === 'undefined' || typeof window.snap.pay !== 'function') {
+                        // Tunggu sampai script selesai dimuat (max 10 detik)
+                        let waitAttempts = 0;
+                        const maxWait = 20; // 20 x 500ms = 10 detik
+                        await new Promise((resolve, reject) => {
+                            const checkInterval = setInterval(() => {
+                                waitAttempts++;
+                                if (typeof window.snap !== 'undefined' && typeof window.snap.pay === 'function') {
+                                    clearInterval(checkInterval);
+                                    resolve();
+                                } else if (waitAttempts >= maxWait) {
+                                    clearInterval(checkInterval);
+                                    reject(new Error('Midtrans payment SDK gagal dimuat. Periksa koneksi internet Anda dan coba refresh halaman.'));
+                                }
+                            }, 500);
+                        });
+                    }
+                    
+                    // Trigger Snap Popup (sekarang aman karena window.snap pasti ada)
                     window.snap.pay(json.snap_token, {
                         onSuccess: function(result) {
                             console.log("Payment Success", result);
@@ -1049,15 +1077,27 @@ document.addEventListener('DOMContentLoaded', function() {
                             loadingOverlay.classList.add('opacity-0', 'pointer-events-none');
                             injectFlashMessage('info', 'Menunggu pembayaran diselesaikan...'); 
                             console.log("Payment Pending", result);
+                            // Re-enable tombol bayar
+                            buttonRef.dataset.processing = 'false';
+                            buttonRef.disabled = false;
+                            buttonRef.innerHTML = originalHtml;
                         },
                         onError: function(result) {
                             loadingOverlay.classList.add('opacity-0', 'pointer-events-none');
                             injectFlashMessage('error', 'Pembayaran gagal atau dibatalkan.');
                             console.error("Payment Error", result);
+                            // Re-enable tombol bayar
+                            buttonRef.dataset.processing = 'false';
+                            buttonRef.disabled = false;
+                            buttonRef.innerHTML = originalHtml;
                         },
                         onClose: function() {
                             loadingOverlay.classList.add('opacity-0', 'pointer-events-none');
                             console.log('Customer closed the popup without finishing the payment');
+                            // Re-enable tombol bayar
+                            buttonRef.dataset.processing = 'false';
+                            buttonRef.disabled = false;
+                            buttonRef.innerHTML = originalHtml;
                         }
                     });
                 } else {
@@ -1074,6 +1114,11 @@ document.addEventListener('DOMContentLoaded', function() {
                 } else {
                     injectFlashMessage('error', e.message);
                 }
+                
+                // Re-enable tombol bayar saat error
+                buttonRef.dataset.processing = 'false';
+                buttonRef.disabled = false;
+                buttonRef.innerHTML = originalHtml;
             }
         });
     });

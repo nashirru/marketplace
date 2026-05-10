@@ -17,14 +17,8 @@ $conn->query("UPDATE notifications SET is_read = 1 WHERE user_id = $user_id AND 
 ?>
 <!DOCTYPE html>
 <html lang="id">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Notifikasi - Warok Kite</title>
+    <?php page_head('Notifikasi - Warok Kite', $conn); ?>
     <script src="https://cdn.tailwindcss.com"></script>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
-    <style>body { font-family: 'Inter', sans-serif; }</style>
-</head>
 <body class="bg-gray-50">
     <?php navbar($conn); ?>
     <main class="container mx-auto px-4 sm:px-6 lg:px-8 py-8">

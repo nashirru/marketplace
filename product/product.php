@@ -94,16 +94,10 @@ if ($limit > 0) {
 
 <!DOCTYPE html>
 <html lang="id">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title><?= htmlspecialchars($product['name']) ?> - <?= get_setting($conn, 'store_name') ?></title>
-    <!-- Pastikan Partial Head dipanggil di partial.php, tapi di sini kita butuh script spesifik -->
+    <?php page_head($product['name'], $conn, $product['description'], null, BASE_URL . '/assets/images/produk/' . $product['image']); ?>
+    <!-- Script spesifik ditambahkan setelah head -->
     <script src="https://cdn.tailwindcss.com"></script>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css">
     <style>
-        body { font-family: 'Inter', sans-serif; }
         .fade-in { animation: fadeIn 0.3s ease-in-out; }
         @keyframes fadeIn { from { opacity: 0.5; } to { opacity: 1; } }
         
@@ -121,7 +115,6 @@ if ($limit > 0) {
             text-decoration: line-through;
         }
     </style>
-</head>
 <body class="bg-white text-gray-800">
 
     <?php navbar($conn) ?>
